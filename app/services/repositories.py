@@ -7,6 +7,9 @@ from sqlalchemy.orm import Session as DbSession, selectinload
 
 from app.models.api import CreateLearnerRequest, CreateSessionRequest
 from app.models.domain import (
+    Account,
+    AuthSession,
+    AuthSessionStatus,
     Concept,
     ConceptObjective,
     EvaluationResult,
@@ -23,6 +26,8 @@ from app.models.domain import (
     TutorTurn,
 )
 from app.services.orm import (
+    AccountRecord,
+    AuthSessionRecord,
     ConceptObjectiveRecord,
     ConceptPrerequisiteRecord,
     ConceptRecord,
@@ -59,6 +64,15 @@ class CurriculumRepository(Protocol):
     def create_concept(self, concept: Concept) -> Concept: ...
     def list_concepts(self, subject: str | None = None) -> list[Concept]: ...
     def get_by_slug(self, slug: str) -> Concept | None: ...
+
+
+class AccountRepository(Protocol):
+    def create(self, account: Account, password_hash: str) -> Account: ...
+    def get_by_email(self, email: str) -> tuple[Account, str] | None: ...
+    def get(self, account_id: str) -> Account | None: ...
+    def create_session(self, auth_session: AuthSession, token_hash: str) -> AuthSession: ...
+    def get_session(self, token_hash: str) -> AuthSession | None: ...
+    def revoke_session(self, token_hash: str) -> None: ...
 
 
 def _learner_from_record(record: LearnerRecord) -> Learner:
@@ -161,6 +175,26 @@ def _concept_from_record(record: ConceptRecord) -> Concept:
             )
             for objective in record.objectives
         ],
+        created_at=record.created_at,
+    )
+
+
+def _account_from_record(record: AccountRecord) -> Account:
+    return Account(
+        id=record.id,
+        email=record.email,
+        learner_id=record.learner_id,
+        created_at=record.created_at,
+    )
+
+
+def _auth_session_from_record(record: AuthSessionRecord) -> AuthSession:
+    return AuthSession(
+        id=record.id,
+        account_id=record.account_id,
+        token="",
+        expires_at=record.expires_at,
+        status=AuthSessionStatus(record.status),
         created_at=record.created_at,
     )
 
@@ -490,3 +524,59 @@ class SqlCurriculumRepository:
                 )
             )
         return concepts
+
+
+class SqlAccountRepository:
+    def __init__(self, db: DbSession) -> None:
+        self.db = db
+
+    def create(self, account: Account, password_hash: str) -> Account:
+        record = AccountRecord(
+            id=account.id,
+            email=account.email,
+            password_hash=password_hash,
+            learner_id=account.learner_id,
+            created_at=account.created_at,
+        )
+        self.db.add(record)
+        self.db.commit()
+        return _account_from_record(record)
+
+    def get_by_email(self, email: str) -> tuple[Account, str] | None:
+        record = self.db.execute(select(AccountRecord).where(AccountRecord.email == email)).scalar_one_or_none()
+        if record is None:
+            return None
+        return _account_from_record(record), record.password_hash
+
+    def get(self, account_id: str) -> Account | None:
+        record = self.db.get(AccountRecord, account_id)
+        return _account_from_record(record) if record is not None else None
+
+    def create_session(self, auth_session: AuthSession, token_hash: str) -> AuthSession:
+        record = AuthSessionRecord(
+            id=auth_session.id,
+            account_id=auth_session.account_id,
+            token_hash=token_hash,
+            expires_at=auth_session.expires_at,
+            status=auth_session.status.value,
+            created_at=auth_session.created_at,
+        )
+        self.db.add(record)
+        self.db.commit()
+        return _auth_session_from_record(record)
+
+    def get_session(self, token_hash: str) -> AuthSession | None:
+        record = self.db.execute(
+            select(AuthSessionRecord).where(AuthSessionRecord.token_hash == token_hash)
+        ).scalar_one_or_none()
+        return _auth_session_from_record(record) if record is not None else None
+
+    def revoke_session(self, token_hash: str) -> None:
+        record = self.db.execute(
+            select(AuthSessionRecord).where(AuthSessionRecord.token_hash == token_hash)
+        ).scalar_one_or_none()
+        if record is None:
+            return
+        record.status = AuthSessionStatus.REVOKED.value
+        self.db.add(record)
+        self.db.commit()

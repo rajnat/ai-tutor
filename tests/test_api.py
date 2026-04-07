@@ -21,6 +21,30 @@ def migrate_test_db() -> None:
     command.upgrade(alembic_cfg, "head")
 
 
+def signup_and_auth_headers(
+    client: TestClient,
+    *,
+    email: str = "eswar@example.com",
+    password: str = "supersecure123",
+    name: str = "Eswar",
+    goal: str = "Learn calculus deeply",
+    initial_topic: str | None = "derivatives",
+) -> tuple[dict[str, str], dict]:
+    response = client.post(
+        "/api/v1/auth/signup",
+        json={
+            "email": email,
+            "password": password,
+            "name": name,
+            "goal": goal,
+            "initial_topic": initial_topic,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    return {"Authorization": f"Bearer {payload['token']}"}, payload
+
+
 def test_healthcheck() -> None:
     migrate_test_db()
     with TestClient(app) as client:
@@ -32,25 +56,13 @@ def test_healthcheck() -> None:
 def test_create_learner_start_session_and_submit_turn() -> None:
     migrate_test_db()
     with TestClient(app) as client:
-        learner_response = client.post(
-            "/api/v1/learners",
-            json={
-                "name": "Eswar",
-                "goal": "Learn calculus deeply",
-                "initial_topic": "derivatives",
-                "preferences": {
-                    "verbosity": "medium",
-                    "prefers_examples": True,
-                    "teaching_style": "socratic",
-                },
-            },
-        )
-        assert learner_response.status_code == 200
-        learner_id = learner_response.json()["id"]
+        headers, auth_payload = signup_and_auth_headers(client)
+        learner_id = auth_payload["learner"]["id"]
 
         session_response = client.post(
             "/api/v1/sessions",
             json={"learner_id": learner_id, "topic": "derivatives", "mode": "learn"},
+            headers=headers,
         )
         assert session_response.status_code == 200
         session_id = session_response.json()["id"]
@@ -58,6 +70,7 @@ def test_create_learner_start_session_and_submit_turn() -> None:
         turn_response = client.post(
             f"/api/v1/sessions/{session_id}/turns",
             json={"message": "I think a derivative means how a function changes step by step."},
+            headers=headers,
         )
         assert turn_response.status_code == 200
         payload = turn_response.json()
@@ -69,31 +82,34 @@ def test_create_learner_start_session_and_submit_turn() -> None:
 def test_due_reviews_and_review_completion() -> None:
     migrate_test_db()
     with TestClient(app) as client:
-        learner_response = client.post(
-            "/api/v1/learners",
-            json={"name": "Eswar", "goal": "Learn calculus deeply"},
-        )
-        learner_id = learner_response.json()["id"]
+        headers, auth_payload = signup_and_auth_headers(client, initial_topic=None)
+        learner_id = auth_payload["learner"]["id"]
 
         session_response = client.post(
             "/api/v1/sessions",
             json={"learner_id": learner_id, "topic": "derivatives", "mode": "learn"},
+            headers=headers,
         )
         session_id = session_response.json()["id"]
 
         turn_response = client.post(
             f"/api/v1/sessions/{session_id}/turns",
             json={"message": "maybe"},
+            headers=headers,
         )
         assert turn_response.status_code == 200
 
-        due_reviews = client.get(f"/api/v1/learners/{learner_id}/reviews/due")
+        due_reviews = client.get(f"/api/v1/learners/{learner_id}/reviews/due", headers=headers)
         assert due_reviews.status_code == 200
         reviews = due_reviews.json()
         assert len(reviews) == 1
         assert reviews[0]["topic"] == "derivatives"
 
-        completed = client.post(f"/api/v1/reviews/{reviews[0]['id']}/complete", json={"correct": True})
+        completed = client.post(
+            f"/api/v1/reviews/{reviews[0]['id']}/complete",
+            json={"correct": True},
+            headers=headers,
+        )
         assert completed.status_code == 200
         assert completed.json()["review_count"] == 1
         assert completed.json()["status"] == "scheduled"
@@ -102,15 +118,8 @@ def test_due_reviews_and_review_completion() -> None:
 def test_curriculum_recommendations_respect_prerequisites() -> None:
     migrate_test_db()
     with TestClient(app) as client:
-        learner_response = client.post(
-            "/api/v1/learners",
-            json={
-                "name": "Eswar",
-                "goal": "Learn calculus deeply",
-                "initial_topic": "algebra",
-            },
-        )
-        learner_id = learner_response.json()["id"]
+        headers, auth_payload = signup_and_auth_headers(client, initial_topic="algebra")
+        learner_id = auth_payload["learner"]["id"]
 
         concept_payloads = [
             {
@@ -143,6 +152,7 @@ def test_curriculum_recommendations_respect_prerequisites() -> None:
         recommendations = client.get(
             f"/api/v1/learners/{learner_id}/curriculum/recommendations",
             params={"subject": "math"},
+            headers=headers,
         )
         assert recommendations.status_code == 200
         recommendation_payload = recommendations.json()
@@ -155,15 +165,8 @@ def test_curriculum_recommendations_respect_prerequisites() -> None:
 def test_session_advances_using_curriculum_graph() -> None:
     migrate_test_db()
     with TestClient(app) as client:
-        learner_response = client.post(
-            "/api/v1/learners",
-            json={
-                "name": "Eswar",
-                "goal": "Learn calculus deeply",
-                "initial_topic": "algebra",
-            },
-        )
-        learner_id = learner_response.json()["id"]
+        headers, auth_payload = signup_and_auth_headers(client, initial_topic="algebra")
+        learner_id = auth_payload["learner"]["id"]
 
         concept_payloads = [
             {
@@ -188,6 +191,7 @@ def test_session_advances_using_curriculum_graph() -> None:
         session_response = client.post(
             "/api/v1/sessions",
             json={"learner_id": learner_id, "topic": "algebra", "mode": "learn"},
+            headers=headers,
         )
         session_id = session_response.json()["id"]
 
@@ -199,6 +203,7 @@ def test_session_advances_using_curriculum_graph() -> None:
             turn_response = client.post(
                 f"/api/v1/sessions/{session_id}/turns",
                 json={"message": strong_answer},
+                headers=headers,
             )
             assert turn_response.status_code == 200
 
@@ -211,11 +216,8 @@ def test_session_advances_using_curriculum_graph() -> None:
 def test_objective_threshold_blocks_premature_advancement() -> None:
     migrate_test_db()
     with TestClient(app) as client:
-        learner_response = client.post(
-            "/api/v1/learners",
-            json={"name": "Eswar", "goal": "Learn calculus deeply", "initial_topic": "algebra"},
-        )
-        learner_id = learner_response.json()["id"]
+        headers, auth_payload = signup_and_auth_headers(client, initial_topic="algebra")
+        learner_id = auth_payload["learner"]["id"]
 
         for payload in [
             {
@@ -239,6 +241,7 @@ def test_objective_threshold_blocks_premature_advancement() -> None:
         session_response = client.post(
             "/api/v1/sessions",
             json={"learner_id": learner_id, "topic": "algebra", "mode": "learn"},
+            headers=headers,
         )
         session_id = session_response.json()["id"]
 
@@ -246,6 +249,7 @@ def test_objective_threshold_blocks_premature_advancement() -> None:
             turn_response = client.post(
                 f"/api/v1/sessions/{session_id}/turns",
                 json={"message": "Because algebra means balancing equations step by step."},
+                headers=headers,
             )
             assert turn_response.status_code == 200
 
@@ -257,11 +261,8 @@ def test_objective_threshold_blocks_premature_advancement() -> None:
 def test_tutor_response_targets_weak_objective() -> None:
     migrate_test_db()
     with TestClient(app) as client:
-        learner_response = client.post(
-            "/api/v1/learners",
-            json={"name": "Eswar", "goal": "Learn calculus deeply", "initial_topic": "algebra"},
-        )
-        learner_id = learner_response.json()["id"]
+        headers, auth_payload = signup_and_auth_headers(client, initial_topic="algebra")
+        learner_id = auth_payload["learner"]["id"]
 
         concept_response = client.post(
             "/api/v1/curriculum/concepts",
@@ -279,12 +280,14 @@ def test_tutor_response_targets_weak_objective() -> None:
         session_response = client.post(
             "/api/v1/sessions",
             json={"learner_id": learner_id, "topic": "algebra", "mode": "learn"},
+            headers=headers,
         )
         session_id = session_response.json()["id"]
 
         turn_response = client.post(
             f"/api/v1/sessions/{session_id}/turns",
             json={"message": "maybe algebra is like moving symbols around"},
+            headers=headers,
         )
         assert turn_response.status_code == 200
         payload = turn_response.json()
@@ -296,11 +299,12 @@ def test_tutor_response_targets_weak_objective() -> None:
 def test_evaluation_updates_targeted_objective_only() -> None:
     migrate_test_db()
     with TestClient(app) as client:
-        learner_response = client.post(
-            "/api/v1/learners",
-            json={"name": "Eswar", "goal": "Learn algebra", "initial_topic": "algebra"},
+        headers, auth_payload = signup_and_auth_headers(
+            client,
+            goal="Learn algebra",
+            initial_topic="algebra",
         )
-        learner_id = learner_response.json()["id"]
+        learner_id = auth_payload["learner"]["id"]
 
         concept_response = client.post(
             "/api/v1/curriculum/concepts",
@@ -320,12 +324,14 @@ def test_evaluation_updates_targeted_objective_only() -> None:
         session_response = client.post(
             "/api/v1/sessions",
             json={"learner_id": learner_id, "topic": "algebra", "mode": "learn"},
+            headers=headers,
         )
         session_id = session_response.json()["id"]
 
         turn_response = client.post(
             f"/api/v1/sessions/{session_id}/turns",
             json={"message": "The notation uses symbols and vocabulary to describe expressions."},
+            headers=headers,
         )
         assert turn_response.status_code == 200
         payload = turn_response.json()
@@ -338,11 +344,12 @@ def test_evaluation_updates_targeted_objective_only() -> None:
 def test_objective_progress_endpoint_groups_progress_by_concept() -> None:
     migrate_test_db()
     with TestClient(app) as client:
-        learner_response = client.post(
-            "/api/v1/learners",
-            json={"name": "Eswar", "goal": "Learn algebra", "initial_topic": "algebra"},
+        headers, auth_payload = signup_and_auth_headers(
+            client,
+            goal="Learn algebra",
+            initial_topic="algebra",
         )
-        learner_id = learner_response.json()["id"]
+        learner_id = auth_payload["learner"]["id"]
 
         concept_response = client.post(
             "/api/v1/curriculum/concepts",
@@ -360,16 +367,19 @@ def test_objective_progress_endpoint_groups_progress_by_concept() -> None:
         session_response = client.post(
             "/api/v1/sessions",
             json={"learner_id": learner_id, "topic": "algebra", "mode": "learn"},
+            headers=headers,
         )
         session_id = session_response.json()["id"]
         client.post(
             f"/api/v1/sessions/{session_id}/turns",
             json={"message": "The notation uses symbols and vocabulary to describe expressions."},
+            headers=headers,
         )
 
         progress_response = client.get(
             f"/api/v1/learners/{learner_id}/progress/objectives",
             params={"subject": "math"},
+            headers=headers,
         )
         assert progress_response.status_code == 200
         payload = progress_response.json()
@@ -381,11 +391,12 @@ def test_objective_progress_endpoint_groups_progress_by_concept() -> None:
 def test_material_suggestions_include_literature_friendly_supplements() -> None:
     migrate_test_db()
     with TestClient(app) as client:
-        learner_response = client.post(
-            "/api/v1/learners",
-            json={"name": "Eswar", "goal": "Learn Russian literature", "initial_topic": "russian-literature"},
+        headers, auth_payload = signup_and_auth_headers(
+            client,
+            goal="Learn Russian literature",
+            initial_topic="russian-literature",
         )
-        learner_id = learner_response.json()["id"]
+        learner_id = auth_payload["learner"]["id"]
 
         concept_response = client.post(
             "/api/v1/curriculum/concepts",
@@ -403,8 +414,85 @@ def test_material_suggestions_include_literature_friendly_supplements() -> None:
         suggestions_response = client.get(
             f"/api/v1/learners/{learner_id}/materials/suggestions",
             params={"topic": "russian-literature"},
+            headers=headers,
         )
         assert suggestions_response.status_code == 200
         payload = suggestions_response.json()
         assert len(payload) >= 3
         assert any(item["material_type"] == "comparison" for item in payload)
+
+
+def test_auth_login_me_and_logout_flow() -> None:
+    migrate_test_db()
+    with TestClient(app) as client:
+        signup_response = client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "auth@example.com",
+                "password": "supersecure123",
+                "name": "Eswar",
+                "goal": "Learn algebra",
+                "initial_topic": "algebra",
+            },
+        )
+        assert signup_response.status_code == 200
+        signup_payload = signup_response.json()
+        token = signup_payload["token"]
+
+        me_response = client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert me_response.status_code == 200
+        assert me_response.json()["account"]["email"] == "auth@example.com"
+
+        logout_response = client.post(
+            "/api/v1/auth/logout",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert logout_response.status_code == 200
+
+        expired_me_response = client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert expired_me_response.status_code == 401
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={"email": "auth@example.com", "password": "supersecure123"},
+        )
+        assert login_response.status_code == 200
+        assert login_response.json()["account"]["email"] == "auth@example.com"
+
+
+def test_protected_routes_reject_cross_learner_access() -> None:
+    migrate_test_db()
+    with TestClient(app) as client:
+        first_headers, first_auth_payload = signup_and_auth_headers(
+            client,
+            email="first@example.com",
+            initial_topic="algebra",
+        )
+        _, second_auth_payload = signup_and_auth_headers(
+            client,
+            email="second@example.com",
+            initial_topic="derivatives",
+        )
+
+        forbidden_response = client.get(
+            f"/api/v1/learners/{second_auth_payload['learner']['id']}",
+            headers=first_headers,
+        )
+        assert forbidden_response.status_code == 403
+
+        forbidden_session = client.post(
+            "/api/v1/sessions",
+            json={
+                "learner_id": second_auth_payload["learner"]["id"],
+                "topic": "derivatives",
+                "mode": "learn",
+            },
+            headers=first_headers,
+        )
+        assert forbidden_session.status_code == 403

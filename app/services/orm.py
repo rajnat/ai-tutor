@@ -23,6 +23,7 @@ class LearnerRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+    account: Mapped["AccountRecord | None"] = relationship(back_populates="learner")
     topic_states: Mapped[list["LearnerTopicStateRecord"]] = relationship(
         back_populates="learner",
         cascade="all, delete-orphan",
@@ -130,6 +131,33 @@ class ReviewItemRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+
+
+class AccountRecord(Base):
+    __tablename__ = "accounts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    learner_id: Mapped[str] = mapped_column(String(36), ForeignKey("learners.id"), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    learner: Mapped["LearnerRecord"] = relationship(back_populates="account")
+    sessions: Mapped[list["AuthSessionRecord"]] = relationship(
+        back_populates="account",
+        cascade="all, delete-orphan",
+    )
+
+
+class AuthSessionRecord(Base):
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(36), ForeignKey("accounts.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    account: Mapped["AccountRecord"] = relationship(back_populates="sessions")
 
 
 class ConceptRecord(Base):

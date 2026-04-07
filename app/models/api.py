@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.domain import (
+    Account,
     Concept,
     ConceptObjective,
     EvaluationResult,
@@ -45,6 +48,29 @@ class CreateConceptRequest(BaseModel):
 
 class CompleteReviewRequest(BaseModel):
     correct: bool
+
+
+class SignupRequest(BaseModel):
+    email: str = Field(min_length=3)
+    password: str = Field(min_length=8)
+    name: str = Field(min_length=1)
+    goal: str = Field(min_length=1)
+    initial_topic: str | None = None
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3)
+    password: str = Field(min_length=8)
+
+
+class AccountResponse(Account):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AuthResponse(BaseModel):
+    token: str
+    account: AccountResponse
+    learner: LearnerResponse
 
 
 class ReviewResponse(ReviewItem):

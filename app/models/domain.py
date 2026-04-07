@@ -32,6 +32,11 @@ class ReviewStatus(str, Enum):
     SCHEDULED = "scheduled"
 
 
+class AuthSessionStatus(str, Enum):
+    ACTIVE = "active"
+    REVOKED = "revoked"
+
+
 class TopicState(BaseModel):
     mastery: float = Field(default=0.0, ge=0.0, le=1.0)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -67,6 +72,22 @@ class Learner(BaseModel):
     learning_style: LearningPreferences = Field(default_factory=LearningPreferences)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class Account(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    email: str
+    learner_id: str
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class AuthSession(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    account_id: str
+    token: str
+    expires_at: datetime
+    status: AuthSessionStatus = AuthSessionStatus.ACTIVE
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class EvaluationResult(BaseModel):
