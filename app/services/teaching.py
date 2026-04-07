@@ -1,4 +1,4 @@
-from app.models.domain import Learner, SessionMode, TutorAction
+from app.models.domain import Concept, ConceptObjective, Learner, SessionMode, TutorAction
 
 
 class TeachingService:
@@ -9,9 +9,16 @@ class TeachingService:
         action: TutorAction,
         learner_message: str,
         mode: SessionMode,
+        next_concept: Concept | None = None,
+        focus_objective: ConceptObjective | None = None,
     ) -> str:
         style = learner.learning_style.teaching_style
         prefers_examples = learner.learning_style.prefers_examples
+        objective_hint = (
+            f" We should focus on {focus_objective.title.lower()}."
+            if focus_objective is not None
+            else ""
+        )
 
         if action == TutorAction.EXPLAIN:
             example = (
@@ -21,13 +28,13 @@ class TeachingService:
             )
             return (
                 f"Let's build intuition for {topic}. I'll keep this {style} and stepwise."
-                f"{example} Tell me how you would explain the core idea back in your own words."
+                f"{objective_hint}{example} Tell me how you would explain the core idea back in your own words."
             )
 
         if action == TutorAction.ASK_DIAGNOSTIC:
             return (
-                f"You’re making progress on {topic}. What is the key principle involved here,"
-                " and why does it matter?"
+                f"You’re making progress on {topic}.{objective_hint}"
+                " What is the key principle involved here, and why does it matter?"
             )
 
         if action == TutorAction.ASK_PRACTICE:
@@ -39,7 +46,7 @@ class TeachingService:
         if action == TutorAction.REINFORCE:
             return (
                 f"I want to tighten up one part of your understanding of {topic}."
-                f" Your last answer suggested a possible gap: '{learner_message}'."
+                f"{objective_hint} Your last answer suggested a possible gap: '{learner_message}'."
                 " Let's correct that and then try one focused question."
             )
 
@@ -47,6 +54,13 @@ class TeachingService:
             return (
                 f"Here’s the concise answer on {topic}, tailored to what you asked."
                 " After you read it, tell me whether you want a deeper explanation or a quick check."
+            )
+
+        if next_concept is not None:
+            return (
+                f"You’ve built enough understanding of {topic} to move forward."
+                f" The next concept in the learning path is {next_concept.title} ({next_concept.slug})."
+                f" {next_concept.description} Let’s connect what you know about {topic} to this new idea."
             )
 
         return (

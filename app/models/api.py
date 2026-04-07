@@ -1,11 +1,17 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.domain import (
+    Concept,
+    ConceptObjective,
     EvaluationResult,
     Learner,
     LearningPreferences,
+    ObjectiveProgress,
+    ReviewItem,
     Session,
     SessionMode,
+    SupplementalMaterial,
+    TopicProgress,
     TutorAction,
 )
 
@@ -26,6 +32,43 @@ class CreateSessionRequest(BaseModel):
 class SubmitTurnRequest(BaseModel):
     message: str = Field(min_length=1)
     mode: SessionMode | None = None
+
+
+class CreateConceptRequest(BaseModel):
+    slug: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    subject: str = Field(min_length=1)
+    prerequisites: list[str] = Field(default_factory=list)
+    objectives: list[str] | None = None
+
+
+class CompleteReviewRequest(BaseModel):
+    correct: bool
+
+
+class ReviewResponse(ReviewItem):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ConceptResponse(Concept):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ConceptObjectiveResponse(ConceptObjective):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ObjectiveProgressResponse(ObjectiveProgress):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TopicProgressResponse(TopicProgress):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SupplementalMaterialResponse(SupplementalMaterial):
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LearnerResponse(Learner):

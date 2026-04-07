@@ -6,3 +6,5 @@ __pycache__/
 .uv-python/
 *.egg-info/
 .env
+frontend/node_modules/
+frontend/.next/

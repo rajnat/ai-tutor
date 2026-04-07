@@ -27,7 +27,18 @@ class SessionMode(str, Enum):
     REVIEW = "review"
 
 
+class ReviewStatus(str, Enum):
+    DUE = "due"
+    SCHEDULED = "scheduled"
+
+
 class TopicState(BaseModel):
+    mastery: float = Field(default=0.0, ge=0.0, le=1.0)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    last_practiced_at: datetime | None = None
+
+
+class ObjectiveState(BaseModel):
     mastery: float = Field(default=0.0, ge=0.0, le=1.0)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     last_practiced_at: datetime | None = None
@@ -51,6 +62,7 @@ class Learner(BaseModel):
     name: str
     goal: str
     skills: dict[str, TopicState] = Field(default_factory=dict)
+    objective_states: dict[str, ObjectiveState] = Field(default_factory=dict)
     misconceptions: list[Misconception] = Field(default_factory=list)
     learning_style: LearningPreferences = Field(default_factory=LearningPreferences)
     created_at: datetime = Field(default_factory=utc_now)
@@ -60,6 +72,7 @@ class Learner(BaseModel):
 class EvaluationResult(BaseModel):
     correctness: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
+    objective_id: str | None = None
     misconception_detected: bool = False
     misconception_description: str | None = None
     reasoning: str
@@ -82,3 +95,61 @@ class Session(BaseModel):
     turns: list[TutorTurn] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ReviewItem(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    learner_id: str
+    topic: str
+    due_at: datetime
+    status: ReviewStatus = ReviewStatus.SCHEDULED
+    interval_days: int = 1
+    review_count: int = 0
+    last_reviewed_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class Concept(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    slug: str
+    title: str
+    description: str
+    subject: str
+    prerequisites: list[str] = Field(default_factory=list)
+    objectives: list["ConceptObjective"] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ConceptObjective(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    concept_id: str | None = None
+    slug: str
+    title: str
+    description: str
+    mastery_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+
+
+class ObjectiveProgress(BaseModel):
+    objective: ConceptObjective
+    mastery: float = Field(default=0.0, ge=0.0, le=1.0)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    last_practiced_at: datetime | None = None
+    is_ready: bool = False
+
+
+class TopicProgress(BaseModel):
+    concept: Concept
+    objectives: list[ObjectiveProgress] = Field(default_factory=list)
+    concept_mastery: float = Field(default=0.0, ge=0.0, le=1.0)
+    concept_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    ready_to_advance: bool = False
+
+
+class SupplementalMaterial(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    title: str
+    material_type: Literal["reading", "video", "exercise", "comparison", "reflection"]
+    description: str
+    rationale: str
+    query: str
