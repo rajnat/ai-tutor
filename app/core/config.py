@@ -7,6 +7,11 @@ class Settings(BaseSettings):
     environment: str = "development"
     auth_session_days: int = 30
     admin_email_allowlist: str = ""
+    auth_cookie_name: str = "adaptive_tutor_session"
+    csrf_cookie_name: str = "adaptive_tutor_csrf"
+    csrf_header_name: str = "X-CSRF-Token"
+    auth_cookie_secure: bool = False
+    cors_allowed_origins: str = "http://localhost:3000,http://localhost:3001"
     llm_provider: str = "openai"
     openai_model: str = "gpt-4.1-mini"
     openai_api_key: str | None = Field(

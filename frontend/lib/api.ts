@@ -13,43 +13,44 @@ import type {
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
-const AUTH_TOKEN_KEY = "adaptive-tutor.auth-token";
-
 type RequestOptions = {
   authenticated?: boolean;
 };
 
-function readAuthToken() {
-  if (typeof window === "undefined") {
+const CSRF_COOKIE_NAME = "adaptive_tutor_csrf";
+const CSRF_HEADER_NAME = "X-CSRF-Token";
+
+function readCookie(name: string) {
+  if (typeof document === "undefined") {
     return null;
   }
-  return window.localStorage.getItem(AUTH_TOKEN_KEY);
+  const cookie = document.cookie
+    .split("; ")
+    .find((part) => part.startsWith(`${name}=`));
+  return cookie ? decodeURIComponent(cookie.split("=", 2)[1] ?? "") : null;
 }
 
 export function setAuthToken(token: string) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.setItem(AUTH_TOKEN_KEY, token);
+  void token;
 }
 
 export function clearAuthSession() {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.removeItem(AUTH_TOKEN_KEY);
+  return;
 }
 
 async function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
-  const token = options?.authenticated === false ? null : readAuthToken();
+  void options;
+  const method = (init?.method ?? "GET").toUpperCase();
+  const csrfToken = method === "GET" || method === "HEAD" || method === "OPTIONS" ? null : readCookie(CSRF_COOKIE_NAME);
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(csrfToken ? { [CSRF_HEADER_NAME]: csrfToken } : {}),
       ...(init?.headers ?? {})
     },
-    cache: "no-store"
+    cache: "no-store",
+    credentials: "include"
   });
 
   if (!response.ok) {
@@ -96,25 +97,15 @@ export function login(payload: { email: string; password: string }) {
 }
 
 export async function getCurrentAuth() {
-  const token = readAuthToken();
-  if (!token) {
-    return null;
-  }
-
   try {
     return await request<AuthPayload>("/auth/me");
   } catch {
-    clearAuthSession();
     return null;
   }
 }
 
 export async function logout() {
-  try {
-    return await request<{ status: string }>("/auth/logout", { method: "POST" });
-  } finally {
-    clearAuthSession();
-  }
+  return request<{ status: string }>("/auth/logout", { method: "POST" });
 }
 
 export function createLearner(payload: {

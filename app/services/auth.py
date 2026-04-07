@@ -31,5 +31,8 @@ class AuthService:
         expires_at = utc_now() + timedelta(days=get_settings().auth_session_days)
         return token, token_hash, expires_at
 
+    def issue_csrf_token(self) -> str:
+        return secrets.token_urlsafe(24)
+
     def hash_token(self, token: str) -> str:
         return sha256(token.encode("utf-8")).hexdigest()

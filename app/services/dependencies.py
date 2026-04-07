@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Cookie, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session as DbSession
 
 from app.models.domain import Account, AuthSessionStatus
@@ -95,12 +95,17 @@ def get_teacher():
 
 def get_current_account(
     authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias="adaptive_tutor_session"),
     db: DbSession = Depends(get_db_session),
 ) -> Account:
-    if authorization is None or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
+    token: str | None = None
+    if authorization is not None and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ").strip()
+    elif session_token:
+        token = session_token
 
-    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing session")
     auth_service = get_auth_service()
     account_repository = get_account_repository(db)
     session = account_repository.get_session(auth_service.hash_token(token))
@@ -118,6 +123,18 @@ def get_current_account(
 def require_admin_account(current_account: Account = Depends(get_current_account)) -> Account:
     if not current_account.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
+    return current_account
+
+
+def require_csrf(
+    request: Request,
+    current_account: Account = Depends(get_current_account),
+) -> Account:
+    settings = get_settings()
+    csrf_cookie = request.cookies.get(settings.csrf_cookie_name)
+    csrf_header = request.headers.get(settings.csrf_header_name)
+    if not csrf_cookie or not csrf_header or csrf_cookie != csrf_header:
+        raise HTTPException(status_code=403, detail="CSRF validation failed")
     return current_account
 
 

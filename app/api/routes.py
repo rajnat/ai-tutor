@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response
 from sqlalchemy.orm import Session as DbSession
 
 from app.models.api import (
@@ -27,6 +27,7 @@ from app.services.curriculum import CurriculumPlanner
 from app.services.dependencies import (
     get_account_repository,
     require_admin_account,
+    require_csrf,
     get_auth_service,
     get_current_account,
     get_curriculum_repository,
@@ -46,8 +47,56 @@ from app.services.content_library import ContentLibraryService
 api_router = APIRouter(prefix="/api/v1")
 
 
+def _set_auth_cookie(response: Response, token: str) -> None:
+    settings = get_settings()
+    response.set_cookie(
+        key=settings.auth_cookie_name,
+        value=token,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite="lax",
+        max_age=settings.auth_session_days * 24 * 60 * 60,
+        path="/",
+    )
+
+
+def _set_csrf_cookie(response: Response, csrf_token: str) -> None:
+    settings = get_settings()
+    response.set_cookie(
+        key=settings.csrf_cookie_name,
+        value=csrf_token,
+        httponly=False,
+        secure=settings.auth_cookie_secure,
+        samesite="lax",
+        max_age=settings.auth_session_days * 24 * 60 * 60,
+        path="/",
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    settings = get_settings()
+    response.delete_cookie(
+        key=settings.auth_cookie_name,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _clear_csrf_cookie(response: Response) -> None:
+    settings = get_settings()
+    response.delete_cookie(
+        key=settings.csrf_cookie_name,
+        httponly=False,
+        secure=settings.auth_cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+
+
 @api_router.post("/auth/signup", response_model=AuthResponse)
-def signup(payload: SignupRequest, db: DbSession = Depends(get_db_session)) -> AuthResponse:
+def signup(payload: SignupRequest, response: Response, db: DbSession = Depends(get_db_session)) -> AuthResponse:
     account_repository = get_account_repository(db)
     auth_service = get_auth_service()
     settings = get_settings()
@@ -75,10 +124,13 @@ def signup(payload: SignupRequest, db: DbSession = Depends(get_db_session)) -> A
         password_hash=auth_service.hash_password(payload.password),
     )
     token, token_hash, expires_at = auth_service.issue_session_token()
+    csrf_token = auth_service.issue_csrf_token()
     account_repository.create_session(
         AuthSession(account_id=account.id, token=token, expires_at=expires_at),
         token_hash=token_hash,
     )
+    _set_auth_cookie(response, token)
+    _set_csrf_cookie(response, csrf_token)
     return AuthResponse(
         token=token,
         account=AccountResponse.model_validate(account),
@@ -87,7 +139,7 @@ def signup(payload: SignupRequest, db: DbSession = Depends(get_db_session)) -> A
 
 
 @api_router.post("/auth/login", response_model=AuthResponse)
-def login(payload: LoginRequest, db: DbSession = Depends(get_db_session)) -> AuthResponse:
+def login(payload: LoginRequest, response: Response, db: DbSession = Depends(get_db_session)) -> AuthResponse:
     account_repository = get_account_repository(db)
     auth_service = get_auth_service()
     result = account_repository.get_by_email(payload.email.lower())
@@ -103,10 +155,13 @@ def login(payload: LoginRequest, db: DbSession = Depends(get_db_session)) -> Aut
         raise HTTPException(status_code=404, detail="Learner not found")
 
     token, token_hash, expires_at = auth_service.issue_session_token()
+    csrf_token = auth_service.issue_csrf_token()
     account_repository.create_session(
         AuthSession(account_id=account.id, token=token, expires_at=expires_at),
         token_hash=token_hash,
     )
+    _set_auth_cookie(response, token)
+    _set_csrf_cookie(response, csrf_token)
     return AuthResponse(
         token=token,
         account=AccountResponse.model_validate(account),
@@ -116,6 +171,7 @@ def login(payload: LoginRequest, db: DbSession = Depends(get_db_session)) -> Aut
 
 @api_router.get("/auth/me", response_model=AuthResponse)
 def auth_me(
+    response: Response,
     current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
 ) -> AuthResponse:
@@ -123,6 +179,7 @@ def auth_me(
     learner = get_learner_repository(db).get(current_account.learner_id)
     if account is None or learner is None:
         raise HTTPException(status_code=404, detail="Account not found")
+    _set_csrf_cookie(response, get_auth_service().issue_csrf_token())
     return AuthResponse(
         token="",
         account=AccountResponse.model_validate(account),
@@ -132,13 +189,22 @@ def auth_me(
 
 @api_router.post("/auth/logout")
 def logout(
-    current_account: Account = Depends(get_current_account),
+    response: Response,
+    current_account: Account = Depends(require_csrf),
     db: DbSession = Depends(get_db_session),
     authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias="adaptive_tutor_session"),
 ) -> dict[str, str]:
     del current_account
+    _clear_auth_cookie(response)
+    _clear_csrf_cookie(response)
+    token: str | None = None
     if authorization and authorization.startswith("Bearer "):
-        get_account_repository(db).revoke_session(get_auth_service().hash_token(authorization.removeprefix("Bearer ").strip()))
+        token = authorization.removeprefix("Bearer ").strip()
+    elif session_token:
+        token = session_token.strip()
+    if token:
+        get_account_repository(db).revoke_session(get_auth_service().hash_token(token))
     return {"status": "ok"}
 
 
@@ -266,7 +332,7 @@ def get_lesson_plan(
 @api_router.post("/sessions", response_model=SessionResponse)
 def create_session(
     payload: CreateSessionRequest,
-    current_account: Account = Depends(get_current_account),
+    current_account: Account = Depends(require_csrf),
     db: DbSession = Depends(get_db_session),
 ) -> SessionResponse:
     if payload.learner_id != current_account.learner_id:
@@ -297,7 +363,7 @@ def get_session(
 def submit_turn(
     session_id: str,
     payload: SubmitTurnRequest,
-    current_account: Account = Depends(get_current_account),
+    current_account: Account = Depends(require_csrf),
     db: DbSession = Depends(get_db_session),
 ) -> SubmitTurnResponse:
     session = get_session_repository(db).get(session_id)
@@ -323,10 +389,10 @@ def submit_turn(
 @api_router.post("/curriculum/concepts", response_model=ConceptResponse)
 def create_concept(
     payload: CreateConceptRequest,
-    current_account: Account = Depends(require_admin_account),
+    current_account: Account = Depends(require_csrf),
     db: DbSession = Depends(get_db_session),
 ) -> ConceptResponse:
-    del current_account
+    require_admin_account(current_account)
     objectives = ObjectiveGenerator().infer_objectives(
         concept_slug=payload.slug,
         concept_description=payload.description,
@@ -349,7 +415,7 @@ def create_concept(
 def complete_review(
     review_id: str,
     payload: CompleteReviewRequest,
-    current_account: Account = Depends(get_current_account),
+    current_account: Account = Depends(require_csrf),
     db: DbSession = Depends(get_db_session),
 ) -> ReviewResponse:
     review = get_review_repository(db).get(review_id)

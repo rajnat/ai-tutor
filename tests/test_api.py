@@ -19,9 +19,9 @@ from app.services.database import engine
 
 def migrate_test_db() -> None:
     engine.dispose()
-    if TEST_DB_PATH.exists():
-        TEST_DB_PATH.unlink()
     alembic_cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    if TEST_DB_PATH.exists():
+        command.downgrade(alembic_cfg, "base")
     command.upgrade(alembic_cfg, "head")
 
 
@@ -45,8 +45,14 @@ def signup_and_auth_headers(
         },
     )
     assert response.status_code == 200
+    assert "adaptive_tutor_session=" in response.headers.get("set-cookie", "")
+    csrf_token = response.cookies.get("adaptive_tutor_csrf")
+    assert csrf_token is not None
     payload = response.json()
-    return {"Authorization": f"Bearer {payload['token']}"}, payload
+    return {
+        "Authorization": f"Bearer {payload['token']}",
+        "X-CSRF-Token": csrf_token,
+    }, payload
 
 
 def test_healthcheck() -> None:
@@ -505,25 +511,17 @@ def test_auth_login_me_and_logout_flow() -> None:
         )
         assert signup_response.status_code == 200
         signup_payload = signup_response.json()
-        token = signup_payload["token"]
-
-        me_response = client.get(
-            "/api/v1/auth/me",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        assert "adaptive_tutor_session=" in signup_response.headers.get("set-cookie", "")
+        me_response = client.get("/api/v1/auth/me")
         assert me_response.status_code == 200
         assert me_response.json()["account"]["email"] == "auth@example.com"
+        csrf_token = client.cookies.get("adaptive_tutor_csrf")
+        assert csrf_token is not None
 
-        logout_response = client.post(
-            "/api/v1/auth/logout",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        logout_response = client.post("/api/v1/auth/logout", headers={"X-CSRF-Token": csrf_token})
         assert logout_response.status_code == 200
 
-        expired_me_response = client.get(
-            "/api/v1/auth/me",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        expired_me_response = client.get("/api/v1/auth/me")
         assert expired_me_response.status_code == 401
 
         login_response = client.post(
@@ -531,7 +529,32 @@ def test_auth_login_me_and_logout_flow() -> None:
             json={"email": "auth@example.com", "password": "supersecure123"},
         )
         assert login_response.status_code == 200
+        assert "adaptive_tutor_session=" in login_response.headers.get("set-cookie", "")
         assert login_response.json()["account"]["email"] == "auth@example.com"
+
+
+def test_mutating_authenticated_route_requires_csrf_header() -> None:
+    migrate_test_db()
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "csrf@example.com",
+                "password": "supersecure123",
+                "name": "Eswar",
+                "goal": "Learn algebra",
+                "initial_topic": "algebra",
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+
+        session_response = client.post(
+            "/api/v1/sessions",
+            json={"learner_id": payload["learner"]["id"], "topic": "algebra", "mode": "learn"},
+            headers={"Authorization": f"Bearer {payload['token']}"},
+        )
+        assert session_response.status_code == 403
 
 
 def test_protected_routes_reject_cross_learner_access() -> None:
