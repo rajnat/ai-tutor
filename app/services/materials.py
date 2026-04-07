@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from app.models.domain import Concept, ConceptObjective, SupplementalMaterial
+from app.services.content_library import ContentLibraryService
 
 
 class SupplementalMaterialService:
+    def __init__(self, content_library: ContentLibraryService) -> None:
+        self.content_library = content_library
+
     def suggest(
         self,
         topic: str,
@@ -12,8 +16,20 @@ class SupplementalMaterialService:
     ) -> list[SupplementalMaterial]:
         subject = concept.subject if concept is not None else "general"
         objective_hint = focus_objective.title if focus_objective is not None else f"{topic} fundamentals"
+        retrieved = [
+            SupplementalMaterial(
+                title=item.title,
+                material_type=_map_content_type(item.content_type),
+                description=item.summary,
+                rationale=(
+                    f"Retrieved from the curated library for {topic} with emphasis on {objective_hint.lower()}."
+                ),
+                query=f"{item.source_name} | {item.content_type} | {item.difficulty}",
+            )
+            for item in self.content_library.retrieve(topic, focus_objective, limit=3)
+        ]
 
-        suggestions = [
+        fallback_suggestions = [
             SupplementalMaterial(
                 title=f"Foundational Reading on {topic}",
                 material_type="reading",
@@ -38,7 +54,7 @@ class SupplementalMaterialService:
         ]
 
         if subject.lower() in {"literature", "russian literature", "history", "humanities"} or "literature" in topic.lower():
-            suggestions.append(
+            fallback_suggestions.append(
                 SupplementalMaterial(
                     title=f"Primary Text Comparison for {topic}",
                     material_type="comparison",
@@ -48,4 +64,25 @@ class SupplementalMaterialService:
                 )
             )
 
-        return suggestions
+        combined: list[SupplementalMaterial] = []
+        seen_titles: set[str] = set()
+        for item in [*retrieved, *fallback_suggestions]:
+            if item.title in seen_titles:
+                continue
+            combined.append(item)
+            seen_titles.add(item.title)
+
+        return combined
+
+
+def _map_content_type(content_type: str) -> str:
+    mapping = {
+        "overview": "reading",
+        "worked_example": "exercise",
+        "exercise": "exercise",
+        "historical_context": "reading",
+        "primary_text": "reading",
+        "comparison": "comparison",
+        "reflection": "reflection",
+    }
+    return mapping.get(content_type, "reading")

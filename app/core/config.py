@@ -6,12 +6,22 @@ class Settings(BaseSettings):
     app_name: str = "Adaptive Tutor API"
     environment: str = "development"
     auth_session_days: int = 30
+    llm_provider: str = "openai"
+    openai_model: str = "gpt-4.1-mini"
+    openai_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ADAPTIVE_TUTOR_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    )
+    openai_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        validation_alias=AliasChoices("ADAPTIVE_TUTOR_OPENAI_BASE_URL", "OPENAI_BASE_URL"),
+    )
     database_url: str = Field(
         default="sqlite:///./adaptive_tutor.db",
         validation_alias=AliasChoices("ADAPTIVE_TUTOR_DATABASE_URL", "DATABASE_URL"),
     )
 
-    model_config = SettingsConfigDict(env_prefix="ADAPTIVE_TUTOR_")
+    model_config = SettingsConfigDict(env_prefix="ADAPTIVE_TUTOR_", populate_by_name=True)
 
 
 def get_settings() -> Settings:

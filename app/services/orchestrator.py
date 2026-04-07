@@ -1,17 +1,21 @@
 from app.models.api import LearnerResponse, SessionResponse, SubmitTurnResponse
-from app.models.domain import Concept, ConceptObjective, Learner, Session, SessionMode, TutorAction, TutorTurn
+from app.models.domain import Concept, ConceptObjective, Learner, LessonPlan, Session, SessionMode, TutorAction, TutorTurn
 from app.services.curriculum import CurriculumPlanner
-from app.services.evaluation import EvaluationService
+from app.services.evaluation import Evaluator
 from app.services.learner_model import LearnerModelService
+from app.services.lesson_planner import LessonPlannerService
+from app.services.memory import LearningMemoryService
 from app.services.objectives import ObjectiveGenerator
 from app.services.repositories import (
     CurriculumRepository,
+    LessonPlanRepository,
     LearnerRepository,
     ReviewRepository,
     SessionRepository,
 )
 from app.services.review import ReviewScheduler
-from app.services.teaching import TeachingService
+from app.services.teaching import Teacher
+from app.services.content_library import ContentLibraryService
 
 
 class SessionOrchestrator:
@@ -21,17 +25,25 @@ class SessionOrchestrator:
         session_repository: SessionRepository,
         review_repository: ReviewRepository,
         curriculum_repository: CurriculumRepository,
+        lesson_plan_repository: LessonPlanRepository,
+        memory_service: LearningMemoryService,
+        content_library: ContentLibraryService,
+        lesson_planner: LessonPlannerService,
         learner_model: LearnerModelService,
-        evaluator: EvaluationService,
+        evaluator: Evaluator,
         curriculum: CurriculumPlanner,
         review_scheduler: ReviewScheduler,
         objective_generator: ObjectiveGenerator,
-        teacher: TeachingService,
+        teacher: Teacher,
     ) -> None:
         self.learner_repository = learner_repository
         self.session_repository = session_repository
         self.review_repository = review_repository
         self.curriculum_repository = curriculum_repository
+        self.lesson_plan_repository = lesson_plan_repository
+        self.memory_service = memory_service
+        self.content_library = content_library
+        self.lesson_planner = lesson_planner
         self.learner_model = learner_model
         self.evaluator = evaluator
         self.curriculum = curriculum
@@ -111,6 +123,25 @@ class SessionOrchestrator:
         focus_objective: ConceptObjective | None = self.curriculum.weakest_objective(
             updated_learner, current_concept
         )
+        memory_context = self.memory_service.build_context(
+            learner=updated_learner,
+            topic=current_topic,
+            focus_objective=focus_objective,
+            current_session=session,
+        )
+        content_snippets = self.content_library.retrieve(
+            topic_slug=current_topic,
+            focus_objective=focus_objective,
+            limit=3,
+            preferred_types=("overview", "worked_example", "historical_context", "comparison"),
+        )
+        lesson_plan: LessonPlan | None = None
+        if current_concept is not None:
+            lesson_plan = self.lesson_planner.get_or_create_plan(
+                learner=updated_learner,
+                concept=current_concept,
+                content_snippets=content_snippets,
+            )
         next_concept: Concept | None = None
         if action == TutorAction.ADVANCE:
             concepts = self.curriculum_repository.list_concepts()
@@ -122,15 +153,21 @@ class SessionOrchestrator:
             if next_concept is not None:
                 session.topic = next_concept.slug
 
-        tutor_response = self.teacher.respond(
+        teaching_response = self.teacher.respond(
             learner=updated_learner,
             topic=current_topic,
             action=action,
             learner_message=learner_message,
             mode=session.mode,
+            current_concept=current_concept,
             next_concept=next_concept,
             focus_objective=focus_objective,
+            recent_turns=session.turns,
+            memory_context=memory_context,
+            content_snippets=content_snippets,
+            lesson_plan=lesson_plan,
         )
+        tutor_response = teaching_response.text
 
         session.turns.append(
             TutorTurn(
@@ -138,6 +175,7 @@ class SessionOrchestrator:
                 tutor_action=action,
                 tutor_response=tutor_response,
                 evaluation=evaluation,
+                teaching_trace=teaching_response.trace,
             )
         )
 

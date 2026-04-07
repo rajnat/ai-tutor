@@ -112,8 +112,46 @@ class SessionTurnRecord(Base):
     misconception_detected: Mapped[bool] = mapped_column(Boolean, default=False)
     misconception_description: Mapped[str | None] = mapped_column(Text(), nullable=True)
     reasoning: Mapped[str] = mapped_column(Text())
+    evaluation_trace: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    teaching_trace: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     session: Mapped["SessionRecord"] = relationship(back_populates="turns")
+
+
+class LessonPlanRecord(Base):
+    __tablename__ = "lesson_plans"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    learner_id: Mapped[str] = mapped_column(String(36), ForeignKey("learners.id"), index=True)
+    topic: Mapped[str] = mapped_column(String(255), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    summary: Mapped[str] = mapped_column(Text())
+    trace: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    steps: Mapped[list["LessonPlanStepRecord"]] = relationship(
+        back_populates="lesson_plan",
+        cascade="all, delete-orphan",
+        order_by="LessonPlanStepRecord.position",
+    )
+
+
+class LessonPlanStepRecord(Base):
+    __tablename__ = "lesson_plan_steps"
+    __table_args__ = (UniqueConstraint("lesson_plan_id", "position", name="uq_lesson_plan_step_position"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    lesson_plan_id: Mapped[str] = mapped_column(String(36), ForeignKey("lesson_plans.id"), index=True)
+    position: Mapped[int] = mapped_column(index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    objective_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    objective_slug: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    instruction: Mapped[str] = mapped_column(Text())
+    rationale: Mapped[str] = mapped_column(Text())
+    step_type: Mapped[str] = mapped_column(String(32))
+    lesson_plan: Mapped["LessonPlanRecord"] = relationship(back_populates="steps")
 
 
 class ReviewItemRecord(Base):

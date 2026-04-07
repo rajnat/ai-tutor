@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 TEST_DB_PATH = Path(__file__).resolve().parent / "test_adaptive_tutor.db"
 
 os.environ["ADAPTIVE_TUTOR_DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH}"
+os.environ["ADAPTIVE_TUTOR_LLM_PROVIDER"] = "stub"
 
 from app.main import app
 from app.services.database import engine
@@ -420,6 +421,39 @@ def test_material_suggestions_include_literature_friendly_supplements() -> None:
         payload = suggestions_response.json()
         assert len(payload) >= 3
         assert any(item["material_type"] == "comparison" for item in payload)
+
+
+def test_lesson_plan_endpoint_returns_generated_plan() -> None:
+    migrate_test_db()
+    with TestClient(app) as client:
+        headers, auth_payload = signup_and_auth_headers(
+            client,
+            goal="Learn algebra",
+            initial_topic="algebra",
+        )
+        learner_id = auth_payload["learner"]["id"]
+
+        concept_response = client.post(
+            "/api/v1/curriculum/concepts",
+            json={
+                "slug": "algebra",
+                "title": "Algebra Foundations",
+                "description": "Core algebraic manipulation.",
+                "subject": "math",
+                "prerequisites": [],
+            },
+        )
+        assert concept_response.status_code == 200
+
+        response = client.get(
+            f"/api/v1/learners/{learner_id}/lesson-plan",
+            params={"topic": "algebra"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["topic"] == "algebra"
+        assert len(payload["steps"]) >= 3
 
 
 def test_auth_login_me_and_logout_flow() -> None:

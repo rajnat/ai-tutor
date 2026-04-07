@@ -9,6 +9,7 @@ from app.models.domain import (
     EvaluationResult,
     Learner,
     LearningPreferences,
+    LessonPlan,
     ObjectiveProgress,
     ReviewItem,
     Session,
@@ -90,6 +91,10 @@ class ObjectiveProgressResponse(ObjectiveProgress):
 
 
 class TopicProgressResponse(TopicProgress):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LessonPlanResponse(LessonPlan):
     model_config = ConfigDict(from_attributes=True)
 
 

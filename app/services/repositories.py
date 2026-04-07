@@ -13,8 +13,11 @@ from app.models.domain import (
     Concept,
     ConceptObjective,
     EvaluationResult,
+    GenerationTrace,
     Learner,
     LearningPreferences,
+    LessonPlan,
+    LessonPlanStep,
     Misconception,
     ObjectiveState,
     ReviewItem,
@@ -31,6 +34,8 @@ from app.services.orm import (
     ConceptObjectiveRecord,
     ConceptPrerequisiteRecord,
     ConceptRecord,
+    LessonPlanRecord,
+    LessonPlanStepRecord,
     LearnerMisconceptionRecord,
     LearnerObjectiveStateRecord,
     LearnerRecord,
@@ -50,6 +55,7 @@ class LearnerRepository(Protocol):
 class SessionRepository(Protocol):
     def create(self, payload: CreateSessionRequest) -> Session: ...
     def get(self, session_id: str) -> Session | None: ...
+    def list_for_learner(self, learner_id: str, limit: int = 10) -> list[Session]: ...
     def save(self, session: Session) -> Session: ...
 
 
@@ -64,6 +70,12 @@ class CurriculumRepository(Protocol):
     def create_concept(self, concept: Concept) -> Concept: ...
     def list_concepts(self, subject: str | None = None) -> list[Concept]: ...
     def get_by_slug(self, slug: str) -> Concept | None: ...
+
+
+class LessonPlanRepository(Protocol):
+    def get_active(self, learner_id: str, topic: str) -> LessonPlan | None: ...
+    def save(self, lesson_plan: LessonPlan) -> LessonPlan: ...
+    def supersede_active(self, learner_id: str, topic: str) -> None: ...
 
 
 class AccountRepository(Protocol):
@@ -131,7 +143,13 @@ def _session_from_record(record: SessionRecord) -> Session:
                     misconception_detected=turn.misconception_detected,
                     misconception_description=turn.misconception_description,
                     reasoning=turn.reasoning,
+                    trace=GenerationTrace.model_validate(turn.evaluation_trace)
+                    if turn.evaluation_trace
+                    else None,
                 ),
+                teaching_trace=GenerationTrace.model_validate(turn.teaching_trace)
+                if turn.teaching_trace
+                else None,
                 created_at=turn.created_at,
             )
             for turn in record.turns
@@ -198,6 +216,31 @@ def _auth_session_from_record(record: AuthSessionRecord) -> AuthSession:
         created_at=record.created_at,
     )
 
+
+def _lesson_plan_from_record(record: LessonPlanRecord) -> LessonPlan:
+    return LessonPlan(
+        id=record.id,
+        learner_id=record.learner_id,
+        topic=record.topic,
+        status=record.status,
+        summary=record.summary,
+        steps=[
+            LessonPlanStep(
+                id=step.id,
+                title=step.title,
+                objective_id=step.objective_id,
+                objective_slug=step.objective_slug,
+                instruction=step.instruction,
+                rationale=step.rationale,
+                step_type=step.step_type,
+            )
+            for step in record.steps
+        ],
+        trace=GenerationTrace.model_validate(record.trace) if record.trace else None,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
 def _learner_query():
     return select(LearnerRecord).options(
         selectinload(LearnerRecord.topic_states),
@@ -215,6 +258,10 @@ def _concept_query():
         selectinload(ConceptRecord.prerequisite_links),
         selectinload(ConceptRecord.objectives),
     )
+
+
+def _lesson_plan_query():
+    return select(LessonPlanRecord).options(selectinload(LessonPlanRecord.steps))
 
 
 class SqlLearnerRepository:
@@ -341,6 +388,15 @@ class SqlSessionRepository:
             return None
         return _session_from_record(record)
 
+    def list_for_learner(self, learner_id: str, limit: int = 10) -> list[Session]:
+        records = self.db.execute(
+            _session_query()
+            .where(SessionRecord.learner_id == learner_id)
+            .order_by(SessionRecord.updated_at.desc())
+            .limit(limit)
+        ).scalars().all()
+        return [_session_from_record(record) for record in records]
+
     def save(self, session: Session) -> Session:
         record = self.db.get(SessionRecord, session.id)
         if record is None:
@@ -365,6 +421,12 @@ class SqlSessionRepository:
                     misconception_detected=turn.evaluation.misconception_detected,
                     misconception_description=turn.evaluation.misconception_description,
                     reasoning=turn.evaluation.reasoning,
+                    evaluation_trace=turn.evaluation.trace.model_dump(mode="json")
+                    if turn.evaluation.trace
+                    else None,
+                    teaching_trace=turn.teaching_trace.model_dump(mode="json")
+                    if turn.teaching_trace
+                    else None,
                     created_at=turn.created_at,
                 )
                 for turn in session.turns
@@ -524,6 +586,76 @@ class SqlCurriculumRepository:
                 )
             )
         return concepts
+
+
+class SqlLessonPlanRepository:
+    def __init__(self, db: DbSession) -> None:
+        self.db = db
+
+    def get_active(self, learner_id: str, topic: str) -> LessonPlan | None:
+        record = self.db.execute(
+            _lesson_plan_query().where(
+                LessonPlanRecord.learner_id == learner_id,
+                LessonPlanRecord.topic == topic,
+                LessonPlanRecord.status == "active",
+            )
+        ).scalar_one_or_none()
+        return _lesson_plan_from_record(record) if record is not None else None
+
+    def supersede_active(self, learner_id: str, topic: str) -> None:
+        records = self.db.execute(
+            select(LessonPlanRecord).where(
+                LessonPlanRecord.learner_id == learner_id,
+                LessonPlanRecord.topic == topic,
+                LessonPlanRecord.status == "active",
+            )
+        ).scalars().all()
+        for record in records:
+            record.status = "superseded"
+            self.db.add(record)
+        if records:
+            self.db.commit()
+
+    def save(self, lesson_plan: LessonPlan) -> LessonPlan:
+        record = self.db.get(LessonPlanRecord, lesson_plan.id)
+        if record is None:
+            record = LessonPlanRecord(
+                id=lesson_plan.id,
+                learner_id=lesson_plan.learner_id,
+                topic=lesson_plan.topic,
+                status=lesson_plan.status,
+                summary=lesson_plan.summary,
+                trace=lesson_plan.trace.model_dump(mode="json") if lesson_plan.trace else None,
+                created_at=lesson_plan.created_at,
+                updated_at=lesson_plan.updated_at,
+            )
+        else:
+            record.status = lesson_plan.status
+            record.summary = lesson_plan.summary
+            record.trace = lesson_plan.trace.model_dump(mode="json") if lesson_plan.trace else None
+            record.updated_at = lesson_plan.updated_at
+            record.steps.clear()
+            self.db.flush()
+
+        record.steps.extend(
+            [
+                LessonPlanStepRecord(
+                    id=step.id,
+                    position=index,
+                    title=step.title,
+                    objective_id=step.objective_id,
+                    objective_slug=step.objective_slug,
+                    instruction=step.instruction,
+                    rationale=step.rationale,
+                    step_type=step.step_type,
+                )
+                for index, step in enumerate(lesson_plan.steps)
+            ]
+        )
+        self.db.add(record)
+        self.db.commit()
+        refreshed = self.db.execute(_lesson_plan_query().where(LessonPlanRecord.id == lesson_plan.id)).scalar_one()
+        return _lesson_plan_from_record(refreshed)
 
 
 class SqlAccountRepository:

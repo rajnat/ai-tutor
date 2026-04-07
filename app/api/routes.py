@@ -10,6 +10,7 @@ from app.models.api import (
     CreateLearnerRequest,
     CreateSessionRequest,
     LearnerResponse,
+    LessonPlanResponse,
     LoginRequest,
     SupplementalMaterialResponse,
     SignupRequest,
@@ -28,6 +29,7 @@ from app.services.dependencies import (
     get_current_account,
     get_curriculum_repository,
     get_learner_repository,
+    get_lesson_plan_repository,
     get_material_service,
     get_orchestrator,
     get_progress_service,
@@ -36,6 +38,8 @@ from app.services.dependencies import (
 )
 from app.services.objectives import ObjectiveGenerator
 from app.services.review import ReviewScheduler
+from app.services.lesson_planner import LessonPlannerService
+from app.services.content_library import ContentLibraryService
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -225,6 +229,34 @@ def get_curriculum_recommendations(
     concepts = get_curriculum_repository(db).list_concepts(subject=subject)
     recommendations = CurriculumPlanner().suggest_next_topic(learner, concepts)
     return [ConceptResponse.model_validate(concept) for concept in recommendations]
+
+
+@api_router.get("/learners/{learner_id}/lesson-plan", response_model=LessonPlanResponse)
+def get_lesson_plan(
+    learner_id: str,
+    topic: str,
+    current_account: tuple[str, str] = Depends(get_current_account),
+    db: DbSession = Depends(get_db_session),
+) -> LessonPlanResponse:
+    _, current_learner_id = current_account
+    if learner_id != current_learner_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    learner = get_learner_repository(db).get(learner_id)
+    if learner is None:
+        raise HTTPException(status_code=404, detail="Learner not found")
+    concept = get_curriculum_repository(db).get_by_slug(topic)
+    if concept is None:
+        raise HTTPException(status_code=404, detail="Concept not found")
+
+    lesson_plan_repository = get_lesson_plan_repository(db)
+    lesson_plan = lesson_plan_repository.get_active(learner_id, topic)
+    if lesson_plan is None:
+        content_snippets = ContentLibraryService().retrieve(topic_slug=topic, limit=3)
+        lesson_plan = LessonPlannerService(
+            lesson_plan_repository=lesson_plan_repository,
+            llm_provider=get_orchestrator(db).lesson_planner.llm_provider,
+        ).create_plan(learner=learner, concept=concept, content_snippets=content_snippets)
+    return LessonPlanResponse.model_validate(lesson_plan)
 
 
 @api_router.post("/sessions", response_model=SessionResponse)

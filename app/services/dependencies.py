@@ -5,23 +5,29 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.models.domain import AuthSessionStatus
 from app.services.auth import AuthService
+from app.services.content_library import ContentLibraryService
 from app.services.curriculum import CurriculumPlanner
 from app.services.database import get_db_session
-from app.services.evaluation import EvaluationService
+from app.services.evaluation import OpenAIEvaluationService
 from app.services.learner_model import LearnerModelService
+from app.services.lesson_planner import LessonPlannerService
+from app.services.llm import OpenAIResponsesProvider, StubResponsesProvider
+from app.services.memory import LearningMemoryService
 from app.services.objectives import ObjectiveGenerator
 from app.services.orchestrator import SessionOrchestrator
 from app.services.progress import ProgressService
 from app.services.repositories import (
     SqlAccountRepository,
     SqlCurriculumRepository,
+    SqlLessonPlanRepository,
     SqlLearnerRepository,
     SqlReviewRepository,
     SqlSessionRepository,
 )
 from app.services.materials import SupplementalMaterialService
 from app.services.review import ReviewScheduler
-from app.services.teaching import TeachingService
+from app.services.teaching import OpenAITeachingService
+from app.core.config import get_settings
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -46,6 +52,10 @@ def get_curriculum_repository(db: DbSession) -> SqlCurriculumRepository:
     return SqlCurriculumRepository(db)
 
 
+def get_lesson_plan_repository(db: DbSession) -> SqlLessonPlanRepository:
+    return SqlLessonPlanRepository(db)
+
+
 def get_account_repository(db: DbSession) -> SqlAccountRepository:
     return SqlAccountRepository(db)
 
@@ -58,11 +68,29 @@ def get_progress_service(db: DbSession) -> ProgressService:
 
 
 def get_material_service() -> SupplementalMaterialService:
-    return SupplementalMaterialService()
+    return SupplementalMaterialService(ContentLibraryService())
 
 
 def get_auth_service() -> AuthService:
     return AuthService()
+
+
+def get_llm_provider():
+    settings = get_settings()
+    provider = settings.llm_provider.lower()
+    if provider == "openai":
+        return OpenAIResponsesProvider(settings)
+    if provider == "stub":
+        return StubResponsesProvider()
+    raise ValueError(f"Unsupported llm provider: {settings.llm_provider}")
+
+
+def get_evaluator():
+    return OpenAIEvaluationService(llm_provider=get_llm_provider())
+
+
+def get_teacher():
+    return OpenAITeachingService(llm_provider=get_llm_provider())
 
 
 def get_current_account(
@@ -93,10 +121,17 @@ def get_orchestrator(db: DbSession) -> SessionOrchestrator:
         session_repository=get_session_repository(db),
         review_repository=get_review_repository(db),
         curriculum_repository=get_curriculum_repository(db),
+        lesson_plan_repository=get_lesson_plan_repository(db),
+        memory_service=LearningMemoryService(get_session_repository(db)),
+        content_library=ContentLibraryService(),
+        lesson_planner=LessonPlannerService(
+            lesson_plan_repository=get_lesson_plan_repository(db),
+            llm_provider=get_llm_provider(),
+        ),
         learner_model=LearnerModelService(),
-        evaluator=EvaluationService(),
+        evaluator=get_evaluator(),
         curriculum=CurriculumPlanner(),
         review_scheduler=ReviewScheduler(),
         objective_generator=ObjectiveGenerator(),
-        teacher=TeachingService(),
+        teacher=get_teacher(),
     )

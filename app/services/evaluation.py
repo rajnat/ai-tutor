@@ -1,16 +1,36 @@
-from app.models.domain import ConceptObjective, EvaluationResult
+from __future__ import annotations
+
+from typing import Protocol
+
+from pydantic import BaseModel, Field
+
+from app.models.domain import ConceptObjective, EvaluationResult, GenerationTrace
+from app.services.llm import LlmProvider
 
 
-class EvaluationService:
-    _POSITIVE_SIGNALS = ("because", "therefore", "for example", "step", "means")
-    _UNCERTAIN_SIGNALS = ("maybe", "i think", "not sure", "guess", "?")
-    _MISCONCEPTION_SIGNALS = ("always", "never", "same as", "equal to")
-    _OBJECTIVE_HINTS = {
-        "intuition": ("why", "meaning", "intuition", "idea", "concept"),
-        "notation": ("notation", "symbol", "term", "vocabulary", "expression"),
-        "application": ("apply", "solve", "compute", "calculate", "step"),
-        "transfer": ("example", "compare", "connect", "real-world", "explain"),
-    }
+class Evaluator(Protocol):
+    def evaluate(
+        self,
+        learner_message: str,
+        topic: str,
+        objectives: list[ConceptObjective] | None = None,
+    ) -> EvaluationResult: ...
+
+
+class LlmEvaluationPayload(BaseModel):
+    correctness: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    objective_id: str | None = None
+    misconception_detected: bool = False
+    misconception_description: str | None = None
+    reasoning: str
+
+
+class OpenAIEvaluationService:
+    PROMPT_VERSION = "evaluation_v2"
+
+    def __init__(self, llm_provider: LlmProvider) -> None:
+        self.llm_provider = llm_provider
 
     def evaluate(
         self,
@@ -18,56 +38,47 @@ class EvaluationService:
         topic: str,
         objectives: list[ConceptObjective] | None = None,
     ) -> EvaluationResult:
-        text = learner_message.strip().lower()
-        word_count = len(text.split())
+        objectives = objectives or []
+        objective_lines = "\n".join(
+            f"- id={objective.id} | title={objective.title} | description={objective.description}"
+            for objective in objectives
+        ) or "- none"
 
-        correctness = 0.35
-        if word_count >= 12:
-            correctness += 0.2
-        if any(signal in text for signal in self._POSITIVE_SIGNALS):
-            correctness += 0.2
-
-        confidence = 0.65
-        if any(signal in text for signal in self._UNCERTAIN_SIGNALS):
-            confidence = 0.35
-
-        misconception_detected = any(signal in text for signal in self._MISCONCEPTION_SIGNALS)
-        misconception_description = None
-        if misconception_detected:
-            misconception_description = f"Potential oversimplification detected in {topic}"
-            correctness -= 0.2
-
-        correctness = min(1.0, max(0.0, correctness))
-        objective_id = self._classify_objective(text=text, objectives=objectives or [])
-
-        reasoning = (
-            "Estimated understanding from answer length, explanatory detail, and confidence cues."
+        prompt_inputs = {
+            "topic": topic,
+            "objective_ids": [objective.id for objective in objectives],
+            "learner_message": learner_message,
+        }
+        prompt = (
+            "You are evaluating a learner response for an adaptive tutoring system.\n"
+            "Return JSON only.\n"
+            "Score the learner's demonstrated understanding, not politeness or fluency.\n"
+            "Choose objective_id from the provided objectives when possible.\n"
+            "If no objective clearly matches, return null.\n"
+            "Set misconception_detected to true only when the answer reveals a concrete misunderstanding.\n\n"
+            f"Topic: {topic}\n"
+            f"Objectives:\n{objective_lines}\n\n"
+            f"Learner response:\n{learner_message}"
         )
 
+        payload = self.llm_provider.generate_structured(
+            prompt=prompt,
+            schema=LlmEvaluationPayload,
+            schema_name="learner_evaluation",
+        )
+        objective_ids = {objective.id for objective in objectives}
+        objective_id = payload.objective_id if payload.objective_id in objective_ids else None
         return EvaluationResult(
-            correctness=correctness,
-            confidence=confidence,
+            correctness=payload.correctness,
+            confidence=payload.confidence,
             objective_id=objective_id,
-            misconception_detected=misconception_detected,
-            misconception_description=misconception_description,
-            reasoning=reasoning,
+            misconception_detected=payload.misconception_detected,
+            misconception_description=payload.misconception_description,
+            reasoning=payload.reasoning,
+            trace=GenerationTrace(
+                provider=self.llm_provider.provider_name,
+                model=self.llm_provider.model_name,
+                prompt_version=self.PROMPT_VERSION,
+                prompt_inputs=prompt_inputs,
+            ),
         )
-
-    def _classify_objective(self, text: str, objectives: list[ConceptObjective]) -> str | None:
-        if not objectives:
-            return None
-
-        best_score = -1
-        best_objective: ConceptObjective | None = None
-        for objective in objectives:
-            objective_text = f"{objective.slug} {objective.title} {objective.description}".lower()
-            score = 0
-            for label, keywords in self._OBJECTIVE_HINTS.items():
-                if label in objective_text:
-                    score += sum(1 for keyword in keywords if keyword in text)
-            score += sum(1 for token in objective.title.lower().split() if token in text)
-            if score > best_score:
-                best_score = score
-                best_objective = objective
-
-        return best_objective.id if best_score > 0 else objectives[0].id

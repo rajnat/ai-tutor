@@ -90,6 +90,13 @@ class AuthSession(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class GenerationTrace(BaseModel):
+    provider: str
+    model: str
+    prompt_version: str
+    prompt_inputs: dict = Field(default_factory=dict)
+
+
 class EvaluationResult(BaseModel):
     correctness: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
@@ -97,6 +104,54 @@ class EvaluationResult(BaseModel):
     misconception_detected: bool = False
     misconception_description: str | None = None
     reasoning: str
+    trace: GenerationTrace | None = None
+
+
+class TeachingResponse(BaseModel):
+    text: str
+    trace: GenerationTrace | None = None
+
+
+class LearningMemoryContext(BaseModel):
+    summary: str
+    related_turns: list[str] = Field(default_factory=list)
+    misconception_notes: list[str] = Field(default_factory=list)
+    prior_successes: list[str] = Field(default_factory=list)
+
+
+class ContentSnippet(BaseModel):
+    id: str
+    title: str
+    topic_slug: str
+    objective_slugs: list[str] = Field(default_factory=list)
+    content_type: str
+    difficulty: str
+    source_name: str
+    summary: str
+    text: str
+    estimated_minutes: int = 5
+
+
+class LessonPlanStep(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    title: str
+    objective_id: str | None = None
+    objective_slug: str | None = None
+    instruction: str
+    rationale: str
+    step_type: Literal["explain", "diagnostic", "practice", "review", "advance"] = "explain"
+
+
+class LessonPlan(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    learner_id: str
+    topic: str
+    status: Literal["active", "superseded"] = "active"
+    summary: str
+    steps: list[LessonPlanStep] = Field(default_factory=list)
+    trace: GenerationTrace | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class TutorTurn(BaseModel):
@@ -105,6 +160,7 @@ class TutorTurn(BaseModel):
     tutor_action: TutorAction
     tutor_response: str
     evaluation: EvaluationResult
+    teaching_trace: GenerationTrace | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 
