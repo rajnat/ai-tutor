@@ -32,6 +32,4 @@ def get_db_session() -> Iterator[Session]:
 
 
 def init_db() -> None:
-    from app.services.orm import LearnerRecord, SessionRecord
-
-    Base.metadata.create_all(bind=engine)
+    return None

@@ -1,16 +1,28 @@
 import os
 from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
 
-os.environ["ADAPTIVE_TUTOR_DATABASE_URL"] = (
-    f"sqlite:///{Path(__file__).resolve().parent / 'test_adaptive_tutor.db'}"
-)
+TEST_DB_PATH = Path(__file__).resolve().parent / "test_adaptive_tutor.db"
+
+os.environ["ADAPTIVE_TUTOR_DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH}"
 
 from app.main import app
+from app.services.database import engine
+
+
+def migrate_test_db() -> None:
+    engine.dispose()
+    if TEST_DB_PATH.exists():
+        TEST_DB_PATH.unlink()
+    alembic_cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    command.upgrade(alembic_cfg, "head")
 
 
 def test_healthcheck() -> None:
+    migrate_test_db()
     with TestClient(app) as client:
         response = client.get("/healthz")
         assert response.status_code == 200
@@ -18,6 +30,7 @@ def test_healthcheck() -> None:
 
 
 def test_create_learner_start_session_and_submit_turn() -> None:
+    migrate_test_db()
     with TestClient(app) as client:
         learner_response = client.post(
             "/api/v1/learners",
