@@ -9,6 +9,7 @@ import {
   getCurrentAuth,
   getCurriculumRecommendations,
   getDueReviews,
+  getLessonPlan,
   getMaterialSuggestions,
   getProgress,
   getSession,
@@ -23,6 +24,8 @@ import type {
   AuthPayload,
   Concept,
   Learner,
+  LessonPlan,
+  LessonPlanStep,
   ObjectiveProgress,
   ReviewItem,
   Session,
@@ -141,6 +144,7 @@ export function LearnerHome() {
   const [learner, setLearner] = useState<Learner | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [progress, setProgress] = useState<TopicProgress[]>([]);
+  const [lessonPlan, setLessonPlan] = useState<LessonPlan | null>(null);
   const [recommendations, setRecommendations] = useState<Concept[]>([]);
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
   const [materials, setMaterials] = useState<SupplementalMaterial[]>([]);
@@ -163,19 +167,27 @@ export function LearnerHome() {
     [recommendations, currentTopic]
   );
   const currentMastery = currentProgress ? Math.round(currentProgress.concept_mastery * 100) : 0;
+  const currentLessonStep = useMemo(() => {
+    if (!lessonPlan) {
+      return null;
+    }
+    return lessonPlan.steps[lessonPlan.current_step_index] ?? lessonPlan.steps[0] ?? null;
+  }, [lessonPlan]);
 
   async function refreshPanels(nextLearner: Learner, nextTopic: string) {
-    const [nextProgress, nextReviews, nextMaterials, nextRecommendations] = await Promise.all([
+    const [nextProgress, nextReviews, nextMaterials, nextRecommendations, nextLessonPlan] = await Promise.all([
       getProgress(nextLearner.id).catch(() => []),
       getDueReviews(nextLearner.id).catch(() => []),
       getMaterialSuggestions(nextLearner.id, nextTopic).catch(() => []),
-      getCurriculumRecommendations(nextLearner.id).catch(() => [])
+      getCurriculumRecommendations(nextLearner.id).catch(() => []),
+      getLessonPlan(nextLearner.id, nextTopic).catch(() => null)
     ]);
 
     setProgress(nextProgress);
     setReviews(nextReviews);
     setMaterials(nextMaterials);
     setRecommendations(nextRecommendations);
+    setLessonPlan(nextLessonPlan);
   }
 
   function syncMessages(nextSession: Session, nextLearner: Learner) {
@@ -314,6 +326,7 @@ export function LearnerHome() {
           setLearner(null);
           setSession(null);
           setProgress([]);
+          setLessonPlan(null);
           setReviews([]);
           setMaterials([]);
           setMessages([]);
@@ -366,7 +379,7 @@ export function LearnerHome() {
     });
   }
 
-  function handleReview(reviewId: string) {
+function handleReview(reviewId: string) {
     if (!learner || !session) {
       return;
     }
@@ -383,6 +396,35 @@ export function LearnerHome() {
         }
       })();
     });
+  }
+
+  function describeStepType(step: LessonPlanStep | null) {
+    if (!step) {
+      return "We’ll adapt the lesson structure once the tutor has more context.";
+    }
+
+    const labels: Record<LessonPlanStep["step_type"], string> = {
+      explain: "Build understanding",
+      diagnostic: "Check understanding",
+      practice: "Practice actively",
+      review: "Revisit a weak spot",
+      advance: "Connect to the next idea"
+    };
+
+    return labels[step.step_type];
+  }
+
+  function getStepState(step: LessonPlanStep, index: number) {
+    if (!lessonPlan) {
+      return "upcoming";
+    }
+    if (lessonPlan.completed_step_ids.includes(step.id)) {
+      return "completed";
+    }
+    if (index === lessonPlan.current_step_index) {
+      return "active";
+    }
+    return index < lessonPlan.current_step_index ? "completed" : "upcoming";
   }
 
   function handleStartRecommendation(topicSlug: string) {
@@ -661,6 +703,46 @@ export function LearnerHome() {
             </div>
           </article>
 
+          <article className="panel">
+            <div className="section-header">
+              <div>
+                <p className="section-label">Lesson Plan</p>
+                <h3>{lessonPlan?.summary ?? "Your tutor is building a plan for this topic."}</h3>
+              </div>
+              <span className="badge active">{describeStepType(currentLessonStep)}</span>
+            </div>
+            {currentLessonStep ? (
+              <div className="plan-highlight">
+                <strong>{currentLessonStep.title}</strong>
+                <p className="supporting-text compact-text">{currentLessonStep.instruction}</p>
+                <p className="supporting-text compact-text">{currentLessonStep.rationale}</p>
+              </div>
+            ) : null}
+            <div className="lesson-plan-list">
+              {lessonPlan?.steps.map((step, index) => {
+                const stepState = getStepState(step, index);
+                return (
+                  <div key={step.id} className={`plan-step ${stepState}`}>
+                    <div className="objective-title-row">
+                      <strong>
+                        {index + 1}. {step.title}
+                      </strong>
+                      <span className={`mini-tag ${stepState === "active" ? "active-tag" : stepState === "completed" ? "completed-tag" : ""}`}>
+                        {stepState === "completed" ? "done" : stepState === "active" ? "active" : step.step_type}
+                      </span>
+                    </div>
+                    <p className="supporting-text compact-text">{step.instruction}</p>
+                  </div>
+                );
+              })}
+            </div>
+            {lessonPlan?.trace ? (
+              <p className="supporting-text compact-text">
+                Planned with {lessonPlan.trace.provider} using {lessonPlan.trace.model}.
+              </p>
+            ) : null}
+          </article>
+
           <article className="panel lesson-panel">
             <div className="panel-heading">
               <div>
@@ -765,8 +847,8 @@ export function LearnerHome() {
           <article className="panel">
             <div className="section-header">
               <div>
-                <p className="section-label">Suggested Material</p>
-                <h3>Helpful next reads</h3>
+                <p className="section-label">Lesson Sources</p>
+                <h3>What today&apos;s lesson is drawing from</h3>
               </div>
             </div>
             <div className="stack-list">
@@ -779,12 +861,12 @@ export function LearnerHome() {
                     </div>
                     <p className="supporting-text compact-text">{material.description}</p>
                     <p className="supporting-text compact-text">{material.rationale}</p>
-                    <p className="supporting-text compact-text">Try searching: {material.query}</p>
+                    <p className="supporting-text compact-text">Source cue: {material.query}</p>
                   </div>
                 ))
               ) : (
                 <div className="empty-card">
-                  <strong>No suggestions yet.</strong>
+                  <strong>No lesson sources yet.</strong>
                   <p className="supporting-text compact-text">As we learn more about your weak spots, we&apos;ll recommend targeted material here.</p>
                 </div>
               )}

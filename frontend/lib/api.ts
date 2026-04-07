@@ -2,6 +2,7 @@ import type {
   AuthPayload,
   Concept,
   Learner,
+  LessonPlan,
   ReviewItem,
   Session,
   SubmitTurnResponse,
@@ -190,6 +191,12 @@ export function getMaterialSuggestions(learnerId: string, topic: string) {
 export function getCurriculumRecommendations(learnerId: string, subject?: string) {
   const query = subject ? `?subject=${encodeURIComponent(subject)}` : "";
   return request<Concept[]>(`/learners/${learnerId}/curriculum/recommendations${query}`);
+}
+
+export function getLessonPlan(learnerId: string, topic: string) {
+  return request<LessonPlan>(
+    `/learners/${learnerId}/lesson-plan?topic=${encodeURIComponent(topic)}`
+  );
 }
 
 export function createConcept(payload: {

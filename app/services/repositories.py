@@ -236,6 +236,8 @@ def _lesson_plan_from_record(record: LessonPlanRecord) -> LessonPlan:
             )
             for step in record.steps
         ],
+        current_step_index=record.current_step_index,
+        completed_step_ids=list(record.completed_step_ids or []),
         trace=GenerationTrace.model_validate(record.trace) if record.trace else None,
         created_at=record.created_at,
         updated_at=record.updated_at,
@@ -625,6 +627,8 @@ class SqlLessonPlanRepository:
                 topic=lesson_plan.topic,
                 status=lesson_plan.status,
                 summary=lesson_plan.summary,
+                current_step_index=lesson_plan.current_step_index,
+                completed_step_ids=list(lesson_plan.completed_step_ids),
                 trace=lesson_plan.trace.model_dump(mode="json") if lesson_plan.trace else None,
                 created_at=lesson_plan.created_at,
                 updated_at=lesson_plan.updated_at,
@@ -632,6 +636,8 @@ class SqlLessonPlanRepository:
         else:
             record.status = lesson_plan.status
             record.summary = lesson_plan.summary
+            record.current_step_index = lesson_plan.current_step_index
+            record.completed_step_ids = list(lesson_plan.completed_step_ids)
             record.trace = lesson_plan.trace.model_dump(mode="json") if lesson_plan.trace else None
             record.updated_at = lesson_plan.updated_at
             record.steps.clear()

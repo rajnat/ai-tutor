@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from pydantic import BaseModel, Field
 
 from app.models.domain import Concept, ContentSnippet, GenerationTrace, Learner, LessonPlan, LessonPlanStep
@@ -101,4 +103,39 @@ class LessonPlannerService:
             ),
         )
         self.lesson_plan_repository.supersede_active(learner.id, concept.slug)
+        return self.lesson_plan_repository.save(lesson_plan)
+
+    def advance_progress(
+        self,
+        lesson_plan: LessonPlan,
+        *,
+        action: str,
+        correctness: float,
+        focus_objective_id: str | None,
+        topic_ready_to_advance: bool,
+    ) -> LessonPlan:
+        if not lesson_plan.steps:
+            return lesson_plan
+
+        current_index = min(max(lesson_plan.current_step_index, 0), len(lesson_plan.steps) - 1)
+        current_step = lesson_plan.steps[current_index]
+
+        should_complete = False
+        if action == "advance" or topic_ready_to_advance:
+            should_complete = True
+        elif current_step.objective_id and current_step.objective_id == focus_objective_id and correctness >= 0.7:
+            should_complete = True
+        elif current_step.step_type in {"diagnostic", "practice", "review"} and correctness >= 0.75:
+            should_complete = True
+        elif current_step.step_type == "explain" and correctness >= 0.65:
+            should_complete = True
+
+        if should_complete and current_step.id not in lesson_plan.completed_step_ids:
+            lesson_plan.completed_step_ids.append(current_step.id)
+
+        while current_index < len(lesson_plan.steps) and lesson_plan.steps[current_index].id in lesson_plan.completed_step_ids:
+            current_index += 1
+
+        lesson_plan.current_step_index = min(current_index, len(lesson_plan.steps) - 1)
+        lesson_plan.updated_at = datetime.now(UTC)
         return self.lesson_plan_repository.save(lesson_plan)

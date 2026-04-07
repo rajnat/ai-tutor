@@ -153,6 +153,15 @@ class SessionOrchestrator:
             if next_concept is not None:
                 session.topic = next_concept.slug
 
+        if lesson_plan is not None:
+            lesson_plan = self.lesson_planner.advance_progress(
+                lesson_plan,
+                action=action.value,
+                correctness=evaluation.correctness,
+                focus_objective_id=focus_objective.id if focus_objective is not None else None,
+                topic_ready_to_advance=self.curriculum.concept_ready_to_advance(updated_learner, current_concept),
+            )
+
         teaching_response = self.teacher.respond(
             learner=updated_learner,
             topic=current_topic,

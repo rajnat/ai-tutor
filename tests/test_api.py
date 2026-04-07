@@ -454,6 +454,8 @@ def test_lesson_plan_endpoint_returns_generated_plan() -> None:
         payload = response.json()
         assert payload["topic"] == "algebra"
         assert len(payload["steps"]) >= 3
+        assert payload["current_step_index"] >= 0
+        assert isinstance(payload["completed_step_ids"], list)
 
 
 def test_auth_login_me_and_logout_flow() -> None:

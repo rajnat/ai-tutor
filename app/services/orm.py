@@ -126,6 +126,8 @@ class LessonPlanRecord(Base):
     topic: Mapped[str] = mapped_column(String(255), index=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     summary: Mapped[str] = mapped_column(Text())
+    current_step_index: Mapped[int] = mapped_column(default=0)
+    completed_step_ids: Mapped[list] = mapped_column(JSON, default=list)
     trace: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

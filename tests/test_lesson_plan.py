@@ -103,3 +103,36 @@ def test_lesson_planner_creates_persisted_plan() -> None:
     assert len(plan.steps) == 3
     assert plan.trace is not None
     assert plan.trace.prompt_version == "lesson_plan_v1"
+
+
+def test_lesson_planner_advances_progress() -> None:
+    repository = InMemoryLessonPlanRepository()
+    planner = LessonPlannerService(repository, StubPlannerProvider())
+
+    learner = Learner(name="Eswar", goal="Learn algebra", learning_style=LearningPreferences())
+    concept = Concept(
+        slug="algebra",
+        title="Algebra Foundations",
+        description="Core algebraic manipulation.",
+        subject="math",
+        objectives=[
+            ConceptObjective(
+                id="obj-1",
+                slug="algebra:intuition",
+                title="Conceptual intuition",
+                description="Understand the core idea.",
+            ),
+        ],
+    )
+
+    plan = planner.create_plan(learner, concept, [])
+    updated = planner.advance_progress(
+        plan,
+        action="diagnostic",
+        correctness=0.8,
+        focus_objective_id="obj-1",
+        topic_ready_to_advance=False,
+    )
+
+    assert len(updated.completed_step_ids) >= 1
+    assert updated.current_step_index >= 1

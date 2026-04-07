@@ -149,6 +149,8 @@ class LessonPlan(BaseModel):
     status: Literal["active", "superseded"] = "active"
     summary: str
     steps: list[LessonPlanStep] = Field(default_factory=list)
+    current_step_index: int = 0
+    completed_step_ids: list[str] = Field(default_factory=list)
     trace: GenerationTrace | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

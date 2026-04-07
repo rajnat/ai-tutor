@@ -88,6 +88,37 @@ export type Concept = {
   created_at: string;
 };
 
+export type LessonPlanStep = {
+  id: string;
+  title: string;
+  objective_id: string | null;
+  objective_slug: string | null;
+  instruction: string;
+  rationale: string;
+  step_type: "explain" | "diagnostic" | "practice" | "review" | "advance";
+};
+
+export type GenerationTrace = {
+  provider: string;
+  model: string;
+  prompt_version: string;
+  prompt_inputs: Record<string, unknown>;
+};
+
+export type LessonPlan = {
+  id: string;
+  learner_id: string;
+  topic: string;
+  status: "active" | "superseded";
+  summary: string;
+  steps: LessonPlanStep[];
+  current_step_index: number;
+  completed_step_ids: string[];
+  trace: GenerationTrace | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ObjectiveProgress = {
   objective: ConceptObjective;
   mastery: number;
