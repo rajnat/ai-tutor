@@ -10,6 +10,7 @@ from app.models.domain import (
     Learner,
     LearningPreferences,
     LessonPlan,
+    LessonPlanStep,
     ObjectiveProgress,
     ReviewItem,
     Session,
@@ -98,6 +99,10 @@ class LessonPlanResponse(LessonPlan):
     model_config = ConfigDict(from_attributes=True)
 
 
+class LessonPlanStepResponse(LessonPlanStep):
+    model_config = ConfigDict(from_attributes=True)
+
+
 class SupplementalMaterialResponse(SupplementalMaterial):
     model_config = ConfigDict(from_attributes=True)
 
@@ -115,5 +120,6 @@ class SubmitTurnResponse(BaseModel):
     tutor_action: TutorAction
     tutor_response: str
     evaluation: EvaluationResult
+    active_lesson_step: LessonPlanStepResponse | None = None
     updated_learner: LearnerResponse
     updated_session: SessionResponse

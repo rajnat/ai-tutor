@@ -162,6 +162,7 @@ export type SubmitTurnResponse = {
   tutor_action: string;
   tutor_response: string;
   evaluation: EvaluationResult;
+  active_lesson_step: LessonPlanStep | null;
   updated_learner: Learner;
   updated_session: Session;
 };

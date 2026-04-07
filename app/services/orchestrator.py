@@ -1,5 +1,15 @@
 from app.models.api import LearnerResponse, SessionResponse, SubmitTurnResponse
-from app.models.domain import Concept, ConceptObjective, Learner, LessonPlan, Session, SessionMode, TutorAction, TutorTurn
+from app.models.domain import (
+    Concept,
+    ConceptObjective,
+    Learner,
+    LessonPlan,
+    LessonPlanStep,
+    Session,
+    SessionMode,
+    TutorAction,
+    TutorTurn,
+)
 from app.services.curriculum import CurriculumPlanner
 from app.services.evaluation import Evaluator
 from app.services.learner_model import LearnerModelService
@@ -50,6 +60,38 @@ class SessionOrchestrator:
         self.review_scheduler = review_scheduler
         self.objective_generator = objective_generator
         self.teacher = teacher
+
+    def _build_fallback_step(
+        self,
+        *,
+        topic: str,
+        action: TutorAction,
+        focus_objective: ConceptObjective | None,
+    ) -> LessonPlanStep:
+        step_title = focus_objective.title if focus_objective is not None else f"Build understanding in {topic}"
+        instruction = (
+            f"Focus on {focus_objective.title.lower()} in {topic}."
+            if focus_objective is not None
+            else f"Keep building understanding in {topic} through the current exchange."
+        )
+        rationale = (
+            "This step keeps the lesson grounded in the learner's current need until a fuller plan is available."
+        )
+        step_type_map = {
+            TutorAction.EXPLAIN: "explain",
+            TutorAction.ASK_DIAGNOSTIC: "diagnostic",
+            TutorAction.ASK_PRACTICE: "practice",
+            TutorAction.REINFORCE: "review",
+            TutorAction.ADVANCE: "advance",
+        }
+        return LessonPlanStep(
+            title=step_title,
+            objective_id=focus_objective.id if focus_objective is not None else None,
+            objective_slug=focus_objective.slug if focus_objective is not None else None,
+            instruction=instruction,
+            rationale=rationale,
+            step_type=step_type_map[action],
+        )
 
     def handle_turn(
         self,
@@ -161,6 +203,16 @@ class SessionOrchestrator:
                 focus_objective_id=focus_objective.id if focus_objective is not None else None,
                 topic_ready_to_advance=self.curriculum.concept_ready_to_advance(updated_learner, current_concept),
             )
+        active_lesson_step = None
+        if lesson_plan is not None and lesson_plan.steps:
+            active_index = min(max(lesson_plan.current_step_index, 0), len(lesson_plan.steps) - 1)
+            active_lesson_step = lesson_plan.steps[active_index]
+        else:
+            active_lesson_step = self._build_fallback_step(
+                topic=current_topic,
+                action=action,
+                focus_objective=focus_objective,
+            )
 
         teaching_response = self.teacher.respond(
             learner=updated_learner,
@@ -204,6 +256,7 @@ class SessionOrchestrator:
             tutor_action=action,
             tutor_response=tutor_response,
             evaluation=evaluation,
+            active_lesson_step=active_lesson_step,
             updated_learner=LearnerResponse.model_validate(saved_learner),
             updated_session=SessionResponse.model_validate(saved_session),
         )

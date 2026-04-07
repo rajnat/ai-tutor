@@ -361,9 +361,9 @@ export function LearnerHome() {
             {
               role: "tutor",
               text: response.tutor_response,
-              meta: `Tutor move: ${response.tutor_action} | Focus: ${
-                response.evaluation.objective_id ?? "general understanding"
-              }`
+              meta: `Tutor move: ${response.tutor_action} | Current step: ${
+                response.active_lesson_step?.title ?? "Adapting the lesson"
+              } | Focus: ${response.evaluation.objective_id ?? "general understanding"}`
             }
           ]);
           setStatus(

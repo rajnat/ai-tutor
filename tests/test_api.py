@@ -76,6 +76,8 @@ def test_create_learner_start_session_and_submit_turn() -> None:
         assert turn_response.status_code == 200
         payload = turn_response.json()
         assert payload["session_id"] == session_id
+        assert payload["active_lesson_step"] is not None
+        assert payload["active_lesson_step"]["title"]
         assert payload["updated_session"]["turns"]
         assert payload["updated_learner"]["skills"]["derivatives"]["mastery"] >= 0.0
 
