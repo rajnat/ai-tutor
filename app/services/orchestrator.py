@@ -2,11 +2,14 @@ from app.models.api import LearnerResponse, SessionResponse, SubmitTurnResponse
 from app.models.domain import (
     Concept,
     ConceptObjective,
+    EvaluationResult,
+    GenerationTrace,
     Learner,
     LessonPlan,
     LessonPlanStep,
     Session,
     SessionMode,
+    TeachingResponse,
     TutorAction,
     TutorTurn,
 )
@@ -14,6 +17,7 @@ from app.services.curriculum import CurriculumPlanner
 from app.services.evaluation import Evaluator
 from app.services.learner_model import LearnerModelService
 from app.services.lesson_planner import LessonPlannerService
+from app.services.llm import LlmError
 from app.services.memory import LearningMemoryService
 from app.services.objectives import ObjectiveGenerator
 from app.services.repositories import (
@@ -107,19 +111,38 @@ class SessionOrchestrator:
         current_topic = session.topic
         current_concept = self.curriculum_repository.get_by_slug(current_topic)
         topic_state = self.learner_model.ensure_topic(learner, current_topic)
-        evaluation = self.evaluator.evaluate(
-            learner_message=learner_message,
-            topic=current_topic,
-            objectives=current_concept.objectives if current_concept is not None else None,
+        evaluation_available = True
+        try:
+            evaluation = self.evaluator.evaluate(
+                learner_message=learner_message,
+                topic=current_topic,
+                objectives=current_concept.objectives if current_concept is not None else None,
+            )
+        except LlmError as error:
+            evaluation_available = False
+            evaluation = EvaluationResult(
+                correctness=0.5,
+                confidence=0.2,
+                reasoning="Evaluation unavailable because the language model could not be reached.",
+                trace=GenerationTrace(
+                    provider="system",
+                    model="degraded",
+                    prompt_version="evaluation_unavailable_v1",
+                    prompt_inputs={"error_type": type(error).__name__},
+                ),
+            )
+        updated_learner = (
+            self.learner_model.update_after_evaluation(
+                learner=learner,
+                topic=current_topic,
+                correctness=evaluation.correctness,
+                confidence=evaluation.confidence,
+                misconception_description=evaluation.misconception_description,
+            )
+            if evaluation_available
+            else learner.model_copy(deep=True)
         )
-        updated_learner = self.learner_model.update_after_evaluation(
-            learner=learner,
-            topic=current_topic,
-            correctness=evaluation.correctness,
-            confidence=evaluation.confidence,
-            misconception_description=evaluation.misconception_description,
-        )
-        if current_concept is not None:
+        if current_concept is not None and evaluation_available:
             objective_ids = [objective.id for objective in current_concept.objectives]
             updated_learner.objective_states = self.objective_generator.ensure_states(
                 updated_learner.objective_states,
@@ -179,11 +202,14 @@ class SessionOrchestrator:
         )
         lesson_plan: LessonPlan | None = None
         if current_concept is not None:
-            lesson_plan = self.lesson_planner.get_or_create_plan(
-                learner=updated_learner,
-                concept=current_concept,
-                content_snippets=content_snippets,
-            )
+            try:
+                lesson_plan = self.lesson_planner.get_or_create_plan(
+                    learner=updated_learner,
+                    concept=current_concept,
+                    content_snippets=content_snippets,
+                )
+            except LlmError:
+                lesson_plan = self.lesson_plan_repository.get_active(updated_learner.id, current_topic)
         next_concept: Concept | None = None
         if action == TutorAction.ADVANCE:
             concepts = self.curriculum_repository.list_concepts()
@@ -195,7 +221,7 @@ class SessionOrchestrator:
             if next_concept is not None:
                 session.topic = next_concept.slug
 
-        if lesson_plan is not None:
+        if lesson_plan is not None and evaluation_available:
             lesson_plan = self.lesson_planner.advance_progress(
                 lesson_plan,
                 action=action.value,
@@ -214,20 +240,34 @@ class SessionOrchestrator:
                 focus_objective=focus_objective,
             )
 
-        teaching_response = self.teacher.respond(
-            learner=updated_learner,
-            topic=current_topic,
-            action=action,
-            learner_message=learner_message,
-            mode=session.mode,
-            current_concept=current_concept,
-            next_concept=next_concept,
-            focus_objective=focus_objective,
-            recent_turns=session.turns,
-            memory_context=memory_context,
-            content_snippets=content_snippets,
-            lesson_plan=lesson_plan,
-        )
+        try:
+            teaching_response = self.teacher.respond(
+                learner=updated_learner,
+                topic=current_topic,
+                action=action,
+                learner_message=learner_message,
+                mode=session.mode,
+                current_concept=current_concept,
+                next_concept=next_concept,
+                focus_objective=focus_objective,
+                recent_turns=session.turns,
+                memory_context=memory_context,
+                content_snippets=content_snippets,
+                lesson_plan=lesson_plan,
+            )
+        except LlmError as error:
+            teaching_response = TeachingResponse(
+                text=(
+                    f"I hit a temporary issue while preparing the next step in {current_topic}. "
+                    "Please try once more, or tell me the part that still feels most confusing and I’ll continue from there."
+                ),
+                trace=GenerationTrace(
+                    provider="system",
+                    model="degraded",
+                    prompt_version="teaching_unavailable_v1",
+                    prompt_inputs={"error_type": type(error).__name__, "topic": current_topic},
+                ),
+            )
         tutor_response = teaching_response.text
 
         session.turns.append(
@@ -248,6 +288,8 @@ class SessionOrchestrator:
             topic=current_topic,
             correctness=evaluation.correctness,
             existing=existing_review,
+            concept=current_concept,
+            focus_objective=focus_objective,
         )
         self.review_repository.save(review_item)
 

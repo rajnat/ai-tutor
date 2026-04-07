@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     app_name: str = "Adaptive Tutor API"
     environment: str = "development"
     auth_session_days: int = 30
+    admin_email_allowlist: str = ""
     llm_provider: str = "openai"
     openai_model: str = "gpt-4.1-mini"
     openai_api_key: str | None = Field(

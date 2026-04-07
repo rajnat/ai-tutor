@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy.orm import Session as DbSession
 
-from app.models.domain import AuthSessionStatus
+from app.models.domain import Account, AuthSessionStatus
 from app.services.auth import AuthService
 from app.services.content_library import ContentLibraryService
 from app.services.curriculum import CurriculumPlanner
@@ -96,7 +96,7 @@ def get_teacher():
 def get_current_account(
     authorization: str | None = Header(default=None),
     db: DbSession = Depends(get_db_session),
-) -> tuple[str, str]:
+) -> Account:
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token")
 
@@ -112,7 +112,13 @@ def get_current_account(
     account = account_repository.get(session.account_id)
     if account is None:
         raise HTTPException(status_code=401, detail="Account not found")
-    return account.id, account.learner_id
+    return account
+
+
+def require_admin_account(current_account: Account = Depends(get_current_account)) -> Account:
+    if not current_account.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_account
 
 
 def get_orchestrator(db: DbSession) -> SessionOrchestrator:

@@ -8,6 +8,7 @@ export type Account = {
   id: string;
   email: string;
   learner_id: string;
+  is_admin: boolean;
   created_at: string;
 };
 
@@ -139,6 +140,10 @@ export type ReviewItem = {
   id: string;
   learner_id: string;
   topic: string;
+  prompt: string;
+  objective_id: string | null;
+  objective_slug: string | null;
+  expected_answer: string | null;
   due_at: string;
   status: "due" | "scheduled";
   interval_days: number;

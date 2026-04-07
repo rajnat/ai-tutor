@@ -78,6 +78,7 @@ class Account(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     email: str
     learner_id: str
+    is_admin: bool = False
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -180,6 +181,10 @@ class ReviewItem(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     learner_id: str
     topic: str
+    prompt: str
+    objective_id: str | None = None
+    objective_slug: str | None = None
+    expected_answer: str | None = None
     due_at: datetime
     status: ReviewStatus = ReviewStatus.SCHEDULED
     interval_days: int = 1

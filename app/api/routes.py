@@ -21,10 +21,12 @@ from app.models.api import (
     SubmitTurnResponse,
 )
 from app.models.domain import Account, AuthSession, Concept
+from app.core.config import get_settings
 from app.services.database import get_db_session
 from app.services.curriculum import CurriculumPlanner
 from app.services.dependencies import (
     get_account_repository,
+    require_admin_account,
     get_auth_service,
     get_current_account,
     get_curriculum_repository,
@@ -48,6 +50,7 @@ api_router = APIRouter(prefix="/api/v1")
 def signup(payload: SignupRequest, db: DbSession = Depends(get_db_session)) -> AuthResponse:
     account_repository = get_account_repository(db)
     auth_service = get_auth_service()
+    settings = get_settings()
     existing = account_repository.get_by_email(payload.email.lower())
     if existing is not None:
         raise HTTPException(status_code=409, detail="Account already exists")
@@ -60,7 +63,15 @@ def signup(payload: SignupRequest, db: DbSession = Depends(get_db_session)) -> A
         )
     )
     account = account_repository.create(
-        Account(email=payload.email.lower(), learner_id=learner.id),
+        Account(
+            email=payload.email.lower(),
+            learner_id=learner.id,
+            is_admin=payload.email.lower() in {
+                email.strip().lower()
+                for email in settings.admin_email_allowlist.split(",")
+                if email.strip()
+            },
+        ),
         password_hash=auth_service.hash_password(payload.password),
     )
     token, token_hash, expires_at = auth_service.issue_session_token()
@@ -105,12 +116,11 @@ def login(payload: LoginRequest, db: DbSession = Depends(get_db_session)) -> Aut
 
 @api_router.get("/auth/me", response_model=AuthResponse)
 def auth_me(
-    current_account: tuple[str, str] = Depends(get_current_account),
+    current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
 ) -> AuthResponse:
-    account_id, learner_id = current_account
-    account = get_account_repository(db).get(account_id)
-    learner = get_learner_repository(db).get(learner_id)
+    account = get_account_repository(db).get(current_account.id)
+    learner = get_learner_repository(db).get(current_account.learner_id)
     if account is None or learner is None:
         raise HTTPException(status_code=404, detail="Account not found")
     return AuthResponse(
@@ -122,7 +132,7 @@ def auth_me(
 
 @api_router.post("/auth/logout")
 def logout(
-    current_account: tuple[str, str] = Depends(get_current_account),
+    current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
     authorization: str | None = Header(default=None),
 ) -> dict[str, str]:
@@ -143,11 +153,10 @@ def create_learner(
 @api_router.get("/learners/{learner_id}", response_model=LearnerResponse)
 def get_learner(
     learner_id: str,
-    current_account: tuple[str, str] = Depends(get_current_account),
+    current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
 ) -> LearnerResponse:
-    _, current_learner_id = current_account
-    if learner_id != current_learner_id:
+    if learner_id != current_account.learner_id:
         raise HTTPException(status_code=403, detail="Forbidden")
     learner = get_learner_repository(db).get(learner_id)
     if learner is None:
@@ -159,11 +168,10 @@ def get_learner(
 def get_objective_progress(
     learner_id: str,
     subject: str | None = None,
-    current_account: tuple[str, str] = Depends(get_current_account),
+    current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
 ) -> list[TopicProgressResponse]:
-    _, current_learner_id = current_account
-    if learner_id != current_learner_id:
+    if learner_id != current_account.learner_id:
         raise HTTPException(status_code=403, detail="Forbidden")
     learner = get_learner_repository(db).get(learner_id)
     if learner is None:
@@ -180,11 +188,10 @@ def get_objective_progress(
 def get_material_suggestions(
     learner_id: str,
     topic: str,
-    current_account: tuple[str, str] = Depends(get_current_account),
+    current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
 ) -> list[SupplementalMaterialResponse]:
-    _, current_learner_id = current_account
-    if learner_id != current_learner_id:
+    if learner_id != current_account.learner_id:
         raise HTTPException(status_code=403, detail="Forbidden")
     learner = get_learner_repository(db).get(learner_id)
     if learner is None:
@@ -199,11 +206,10 @@ def get_material_suggestions(
 @api_router.get("/learners/{learner_id}/reviews/due", response_model=list[ReviewResponse])
 def get_due_reviews(
     learner_id: str,
-    current_account: tuple[str, str] = Depends(get_current_account),
+    current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
 ) -> list[ReviewResponse]:
-    _, current_learner_id = current_account
-    if learner_id != current_learner_id:
+    if learner_id != current_account.learner_id:
         raise HTTPException(status_code=403, detail="Forbidden")
     learner = get_learner_repository(db).get(learner_id)
     if learner is None:
@@ -216,11 +222,10 @@ def get_due_reviews(
 def get_curriculum_recommendations(
     learner_id: str,
     subject: str | None = None,
-    current_account: tuple[str, str] = Depends(get_current_account),
+    current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
 ) -> list[ConceptResponse]:
-    _, current_learner_id = current_account
-    if learner_id != current_learner_id:
+    if learner_id != current_account.learner_id:
         raise HTTPException(status_code=403, detail="Forbidden")
     learner = get_learner_repository(db).get(learner_id)
     if learner is None:
@@ -235,11 +240,10 @@ def get_curriculum_recommendations(
 def get_lesson_plan(
     learner_id: str,
     topic: str,
-    current_account: tuple[str, str] = Depends(get_current_account),
+    current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
 ) -> LessonPlanResponse:
-    _, current_learner_id = current_account
-    if learner_id != current_learner_id:
+    if learner_id != current_account.learner_id:
         raise HTTPException(status_code=403, detail="Forbidden")
     learner = get_learner_repository(db).get(learner_id)
     if learner is None:
@@ -262,11 +266,10 @@ def get_lesson_plan(
 @api_router.post("/sessions", response_model=SessionResponse)
 def create_session(
     payload: CreateSessionRequest,
-    current_account: tuple[str, str] = Depends(get_current_account),
+    current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
 ) -> SessionResponse:
-    _, current_learner_id = current_account
-    if payload.learner_id != current_learner_id:
+    if payload.learner_id != current_account.learner_id:
         raise HTTPException(status_code=403, detail="Forbidden")
     learner = get_learner_repository(db).get(payload.learner_id)
     if learner is None:
@@ -279,14 +282,13 @@ def create_session(
 @api_router.get("/sessions/{session_id}", response_model=SessionResponse)
 def get_session(
     session_id: str,
-    current_account: tuple[str, str] = Depends(get_current_account),
+    current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
 ) -> SessionResponse:
     session = get_session_repository(db).get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    _, current_learner_id = current_account
-    if session.learner_id != current_learner_id:
+    if session.learner_id != current_account.learner_id:
         raise HTTPException(status_code=403, detail="Forbidden")
     return SessionResponse.model_validate(session)
 
@@ -295,14 +297,13 @@ def get_session(
 def submit_turn(
     session_id: str,
     payload: SubmitTurnRequest,
-    current_account: tuple[str, str] = Depends(get_current_account),
+    current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
 ) -> SubmitTurnResponse:
     session = get_session_repository(db).get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    _, current_learner_id = current_account
-    if session.learner_id != current_learner_id:
+    if session.learner_id != current_account.learner_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     learner = get_learner_repository(db).get(session.learner_id)
@@ -321,8 +322,11 @@ def submit_turn(
 
 @api_router.post("/curriculum/concepts", response_model=ConceptResponse)
 def create_concept(
-    payload: CreateConceptRequest, db: DbSession = Depends(get_db_session)
+    payload: CreateConceptRequest,
+    current_account: Account = Depends(require_admin_account),
+    db: DbSession = Depends(get_db_session),
 ) -> ConceptResponse:
+    del current_account
     objectives = ObjectiveGenerator().infer_objectives(
         concept_slug=payload.slug,
         concept_description=payload.description,
@@ -345,16 +349,49 @@ def create_concept(
 def complete_review(
     review_id: str,
     payload: CompleteReviewRequest,
-    current_account: tuple[str, str] = Depends(get_current_account),
+    current_account: Account = Depends(get_current_account),
     db: DbSession = Depends(get_db_session),
 ) -> ReviewResponse:
     review = get_review_repository(db).get(review_id)
     if review is None:
         raise HTTPException(status_code=404, detail="Review not found")
-    _, current_learner_id = current_account
-    if review.learner_id != current_learner_id:
+    if review.learner_id != current_account.learner_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    updated = ReviewScheduler().complete_review(review, correct=payload.correct)
+    learner = get_learner_repository(db).get(review.learner_id)
+    if learner is None:
+        raise HTTPException(status_code=404, detail="Learner not found")
+    concept = get_curriculum_repository(db).get_by_slug(review.topic)
+    objectives = concept.objectives if concept is not None else []
+    if review.objective_id is not None:
+        objectives = [objective for objective in objectives if objective.id == review.objective_id]
+
+    orchestrator = get_orchestrator(db)
+    evaluation = orchestrator.evaluator.evaluate(
+        learner_message=payload.answer,
+        topic=review.topic,
+        objectives=objectives,
+    )
+    updated_learner = orchestrator.learner_model.update_after_evaluation(
+        learner=learner,
+        topic=review.topic,
+        correctness=evaluation.correctness,
+        confidence=evaluation.confidence,
+        misconception_description=evaluation.misconception_description,
+    )
+    if review.objective_id is not None:
+        updated_learner.objective_states = orchestrator.objective_generator.ensure_states(
+            updated_learner.objective_states,
+            [review.objective_id],
+        )
+        updated_learner.objective_states = orchestrator.objective_generator.update_single_objective_state(
+            updated_learner.objective_states,
+            objective_id=review.objective_id,
+            correctness=evaluation.correctness,
+            confidence=evaluation.confidence,
+        )
+    get_learner_repository(db).save(updated_learner)
+
+    updated = ReviewScheduler().complete_review(review, correctness=evaluation.correctness)
     saved = get_review_repository(db).save(updated)
     return ReviewResponse.model_validate(saved)

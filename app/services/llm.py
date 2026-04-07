@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import TypeVar
 
 import httpx
@@ -8,6 +9,18 @@ from pydantic import BaseModel
 from app.core.config import Settings
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
+
+
+class LlmError(Exception):
+    pass
+
+
+class LlmUnavailableError(LlmError):
+    pass
+
+
+class LlmResponseError(LlmError):
+    pass
 
 
 class LlmProvider:
@@ -32,6 +45,7 @@ class LlmProvider:
 
 class OpenAIResponsesProvider(LlmProvider):
     provider_name = "openai"
+    _MAX_ATTEMPTS = 3
 
     def __init__(self, settings: Settings, http_client: httpx.Client | None = None) -> None:
         if not settings.openai_api_key:
@@ -43,25 +57,39 @@ class OpenAIResponsesProvider(LlmProvider):
             timeout=30.0,
         )
 
+    def _post_responses(self, json_payload: dict) -> dict:
+        last_error: Exception | None = None
+        for attempt in range(1, self._MAX_ATTEMPTS + 1):
+            try:
+                response = self.http_client.post(
+                    "/responses",
+                    headers={
+                        "Authorization": f"Bearer {self.settings.openai_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=json_payload,
+                )
+                response.raise_for_status()
+                return response.json()
+            except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as error:
+                last_error = error
+                if attempt == self._MAX_ATTEMPTS:
+                    break
+                time.sleep(0.2 * attempt)
+        raise LlmUnavailableError("The language model is temporarily unavailable.") from last_error
+
     def generate_text(
         self,
         prompt: str,
         instructions: str | None = None,
     ) -> str:
-        response = self.http_client.post(
-            "/responses",
-            headers={
-                "Authorization": f"Bearer {self.settings.openai_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
+        payload = self._post_responses(
+            {
                 "model": self.settings.openai_model,
                 "instructions": instructions,
                 "input": prompt,
-            },
+            }
         )
-        response.raise_for_status()
-        payload = response.json()
         output_text = payload.get("output_text")
         if output_text:
             return str(output_text).strip()
@@ -75,7 +103,7 @@ class OpenAIResponsesProvider(LlmProvider):
                     if text:
                         return str(text).strip()
 
-        raise ValueError("No text output returned by OpenAI Responses API")
+        raise LlmResponseError("No text output returned by OpenAI Responses API")
 
     def generate_structured(
         self,
@@ -83,13 +111,8 @@ class OpenAIResponsesProvider(LlmProvider):
         schema: type[SchemaT],
         schema_name: str,
     ) -> SchemaT:
-        response = self.http_client.post(
-            "/responses",
-            headers={
-                "Authorization": f"Bearer {self.settings.openai_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
+        payload = self._post_responses(
+            {
                 "model": self.settings.openai_model,
                 "input": [
                     {
@@ -119,10 +142,8 @@ class OpenAIResponsesProvider(LlmProvider):
                         "schema": schema.model_json_schema(),
                     }
                 },
-            },
+            }
         )
-        response.raise_for_status()
-        payload = response.json()
 
         for item in payload.get("output", []):
             if item.get("type") != "message":
@@ -131,9 +152,12 @@ class OpenAIResponsesProvider(LlmProvider):
                 if content.get("type") == "output_text":
                     text = content.get("text")
                     if text:
-                        return schema.model_validate_json(text)
+                        try:
+                            return schema.model_validate_json(text)
+                        except Exception as error:
+                            raise LlmResponseError("Invalid structured output returned by OpenAI Responses API") from error
 
-        raise ValueError("No structured output returned by OpenAI Responses API")
+        raise LlmResponseError("No structured output returned by OpenAI Responses API")
 
 
 class StubResponsesProvider(LlmProvider):

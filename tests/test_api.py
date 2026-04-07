@@ -9,6 +9,9 @@ TEST_DB_PATH = Path(__file__).resolve().parent / "test_adaptive_tutor.db"
 
 os.environ["ADAPTIVE_TUTOR_DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH}"
 os.environ["ADAPTIVE_TUTOR_LLM_PROVIDER"] = "stub"
+os.environ["ADAPTIVE_TUTOR_ADMIN_EMAIL_ALLOWLIST"] = (
+    "eswar@example.com,auth@example.com,first@example.com,second@example.com"
+)
 
 from app.main import app
 from app.services.database import engine
@@ -110,7 +113,7 @@ def test_due_reviews_and_review_completion() -> None:
 
         completed = client.post(
             f"/api/v1/reviews/{reviews[0]['id']}/complete",
-            json={"correct": True},
+            json={"answer": "A derivative describes how a function changes at a point."},
             headers=headers,
         )
         assert completed.status_code == 200
@@ -149,7 +152,7 @@ def test_curriculum_recommendations_respect_prerequisites() -> None:
         ]
 
         for payload in concept_payloads:
-            response = client.post("/api/v1/curriculum/concepts", json=payload)
+            response = client.post("/api/v1/curriculum/concepts", json=payload, headers=headers)
             assert response.status_code == 200
 
         recommendations = client.get(
@@ -163,6 +166,28 @@ def test_curriculum_recommendations_respect_prerequisites() -> None:
         assert "algebra" in slugs
         assert "derivatives" not in slugs
         assert len(recommendation_payload[0]["objectives"]) == 4
+
+
+def test_curriculum_mutation_requires_admin_account() -> None:
+    migrate_test_db()
+    with TestClient(app) as client:
+        headers, _ = signup_and_auth_headers(
+            client,
+            email="learner-only@example.com",
+            initial_topic="algebra",
+        )
+        response = client.post(
+            "/api/v1/curriculum/concepts",
+            json={
+                "slug": "limits",
+                "title": "Limits",
+                "description": "Approaching values.",
+                "subject": "math",
+                "prerequisites": [],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 403
 
 
 def test_session_advances_using_curriculum_graph() -> None:
@@ -188,7 +213,7 @@ def test_session_advances_using_curriculum_graph() -> None:
             },
         ]
         for payload in concept_payloads:
-            response = client.post("/api/v1/curriculum/concepts", json=payload)
+            response = client.post("/api/v1/curriculum/concepts", json=payload, headers=headers)
             assert response.status_code == 200
 
         session_response = client.post(
@@ -238,7 +263,7 @@ def test_objective_threshold_blocks_premature_advancement() -> None:
                 "prerequisites": ["algebra"],
             },
         ]:
-            response = client.post("/api/v1/curriculum/concepts", json=payload)
+            response = client.post("/api/v1/curriculum/concepts", json=payload, headers=headers)
             assert response.status_code == 200
 
         session_response = client.post(
@@ -277,6 +302,7 @@ def test_tutor_response_targets_weak_objective() -> None:
                 "prerequisites": [],
                 "objectives": ["Conceptual intuition", "Notation and vocabulary"],
             },
+            headers=headers,
         )
         assert concept_response.status_code == 200
 
@@ -319,6 +345,7 @@ def test_evaluation_updates_targeted_objective_only() -> None:
                 "prerequisites": [],
                 "objectives": ["Conceptual intuition", "Notation and vocabulary"],
             },
+            headers=headers,
         )
         concept = concept_response.json()
         intuition_objective = next(obj for obj in concept["objectives"] if "intuition" in obj["slug"])
@@ -364,6 +391,7 @@ def test_objective_progress_endpoint_groups_progress_by_concept() -> None:
                 "prerequisites": [],
                 "objectives": ["Conceptual intuition", "Notation and vocabulary"],
             },
+            headers=headers,
         )
         assert concept_response.status_code == 200
 
@@ -411,6 +439,7 @@ def test_material_suggestions_include_literature_friendly_supplements() -> None:
                 "prerequisites": [],
                 "objectives": ["Historical context", "Theme comparison"],
             },
+            headers=headers,
         )
         assert concept_response.status_code == 200
 
@@ -444,6 +473,7 @@ def test_lesson_plan_endpoint_returns_generated_plan() -> None:
                 "subject": "math",
                 "prerequisites": [],
             },
+            headers=headers,
         )
         assert concept_response.status_code == 200
 

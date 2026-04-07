@@ -164,6 +164,10 @@ def _review_from_record(record: ReviewItemRecord) -> ReviewItem:
         id=record.id,
         learner_id=record.learner_id,
         topic=record.topic,
+        prompt=record.prompt,
+        objective_id=record.objective_id,
+        objective_slug=record.objective_slug,
+        expected_answer=record.expected_answer,
         due_at=record.due_at,
         status=ReviewStatus(record.status),
         interval_days=record.interval_days,
@@ -202,6 +206,7 @@ def _account_from_record(record: AccountRecord) -> Account:
         id=record.id,
         email=record.email,
         learner_id=record.learner_id,
+        is_admin=record.is_admin,
         created_at=record.created_at,
     )
 
@@ -472,6 +477,10 @@ class SqlReviewRepository:
                 id=review_item.id,
                 learner_id=review_item.learner_id,
                 topic=review_item.topic,
+                prompt=review_item.prompt,
+                objective_id=review_item.objective_id,
+                objective_slug=review_item.objective_slug,
+                expected_answer=review_item.expected_answer,
                 due_at=review_item.due_at,
                 status=review_item.status.value,
                 interval_days=review_item.interval_days,
@@ -482,6 +491,10 @@ class SqlReviewRepository:
             )
         else:
             record.topic = review_item.topic
+            record.prompt = review_item.prompt
+            record.objective_id = review_item.objective_id
+            record.objective_slug = review_item.objective_slug
+            record.expected_answer = review_item.expected_answer
             record.due_at = review_item.due_at
             record.status = review_item.status.value
             record.interval_days = review_item.interval_days
@@ -674,6 +687,7 @@ class SqlAccountRepository:
             email=account.email,
             password_hash=password_hash,
             learner_id=account.learner_id,
+            is_admin=account.is_admin,
             created_at=account.created_at,
         )
         self.db.add(record)

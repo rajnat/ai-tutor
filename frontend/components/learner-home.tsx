@@ -149,6 +149,7 @@ export function LearnerHome() {
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
   const [materials, setMaterials] = useState<SupplementalMaterial[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [reviewAnswers, setReviewAnswers] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState("");
   const [signupForm, setSignupForm] = useState<SignupForm>(DEFAULT_SIGNUP_FORM);
   const [loginForm, setLoginForm] = useState<LoginForm>(DEFAULT_LOGIN_FORM);
@@ -330,6 +331,7 @@ export function LearnerHome() {
           setReviews([]);
           setMaterials([]);
           setMessages([]);
+          setReviewAnswers({});
           setDraft("");
           setError(null);
           setAuthStatus("signed_out");
@@ -379,8 +381,13 @@ export function LearnerHome() {
     });
   }
 
-function handleReview(reviewId: string) {
+  function handleReview(reviewId: string) {
     if (!learner || !session) {
+      return;
+    }
+    const answer = reviewAnswers[reviewId]?.trim();
+    if (!answer) {
+      setError("Write a short answer before submitting the review.");
       return;
     }
 
@@ -388,7 +395,12 @@ function handleReview(reviewId: string) {
       void (async () => {
         try {
           setError(null);
-          await completeReview(reviewId, true);
+          await completeReview(reviewId, answer);
+          setReviewAnswers((current) => {
+            const next = { ...current };
+            delete next[reviewId];
+            return next;
+          });
           await refreshPanels(learner, session.topic);
           setStatus("Review recorded.");
         } catch (reviewError) {
@@ -629,9 +641,11 @@ function handleReview(reviewId: string) {
         </div>
         <div className="topbar-actions">
           <span className="status-chip">{status}</span>
-          <Link className="text-link" href="/admin">
-            Internal tools
-          </Link>
+          {account?.is_admin ? (
+            <Link className="text-link" href="/admin">
+              Internal tools
+            </Link>
+          ) : null}
           <button className="ghost-button" onClick={handleLogout} disabled={isPending}>
             Sign out
           </button>
@@ -828,10 +842,19 @@ function handleReview(reviewId: string) {
                 reviews.map((review) => (
                   <div key={review.id} className="info-tile">
                     <strong>{review.topic}</strong>
+                    <p className="supporting-text compact-text">{review.prompt}</p>
                     <p className="supporting-text compact-text">Due {formatDueLabel(review.due_at)}</p>
                     <p className="supporting-text compact-text">{review.review_count} prior review{review.review_count === 1 ? "" : "s"}</p>
-                    <button className="ghost-button inline-button" onClick={() => handleReview(review.id)} disabled={isPending}>
-                      Mark reviewed
+                    <textarea
+                      rows={3}
+                      placeholder="Write your answer from memory."
+                      value={reviewAnswers[review.id] ?? ""}
+                      onChange={(event) =>
+                        setReviewAnswers((current) => ({ ...current, [review.id]: event.target.value }))
+                      }
+                    />
+                    <button className="ghost-button inline-button" onClick={() => handleReview(review.id)} disabled={isPending || !(reviewAnswers[review.id] ?? "").trim()}>
+                      Submit review
                     </button>
                   </div>
                 ))

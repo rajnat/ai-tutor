@@ -175,10 +175,10 @@ export function getDueReviews(learnerId: string) {
   return request<ReviewItem[]>(`/learners/${learnerId}/reviews/due`);
 }
 
-export function completeReview(reviewId: string, correct: boolean) {
+export function completeReview(reviewId: string, answer: string) {
   return request<ReviewItem>(`/reviews/${reviewId}/complete`, {
     method: "POST",
-    body: JSON.stringify({ correct })
+    body: JSON.stringify({ answer })
   });
 }
 
@@ -207,12 +207,8 @@ export function createConcept(payload: {
   prerequisites: string[];
   objectives?: string[];
 }) {
-  return request<Concept>(
-    "/curriculum/concepts",
-    {
-      method: "POST",
-      body: JSON.stringify(payload)
-    },
-    { authenticated: false }
-  );
+  return request<Concept>("/curriculum/concepts", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
 }

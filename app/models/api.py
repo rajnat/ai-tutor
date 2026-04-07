@@ -49,7 +49,7 @@ class CreateConceptRequest(BaseModel):
 
 
 class CompleteReviewRequest(BaseModel):
-    correct: bool
+    answer: str = Field(min_length=1)
 
 
 class SignupRequest(BaseModel):

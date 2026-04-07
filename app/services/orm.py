@@ -162,6 +162,10 @@ class ReviewItemRecord(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     learner_id: Mapped[str] = mapped_column(String(36), ForeignKey("learners.id"), index=True)
     topic: Mapped[str] = mapped_column(String(255), index=True)
+    prompt: Mapped[str] = mapped_column(Text())
+    objective_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    objective_slug: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    expected_answer: Mapped[str | None] = mapped_column(Text(), nullable=True)
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     interval_days: Mapped[int]
@@ -180,6 +184,7 @@ class AccountRecord(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     learner_id: Mapped[str] = mapped_column(String(36), ForeignKey("learners.id"), unique=True, index=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     learner: Mapped["LearnerRecord"] = relationship(back_populates="account")
     sessions: Mapped[list["AuthSessionRecord"]] = relationship(
