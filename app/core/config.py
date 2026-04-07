@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "Adaptive Tutor API"
     environment: str = "development"
+    log_level: str = "INFO"
     auth_session_days: int = 30
     admin_email_allowlist: str = ""
     auth_cookie_name: str = "adaptive_tutor_session"

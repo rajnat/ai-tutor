@@ -465,6 +465,25 @@ export function LearnerHome() {
     });
   }
 
+  function handleRefreshPath() {
+    if (!learner) {
+      return;
+    }
+
+    startTransition(() => {
+      void (async () => {
+        try {
+          setError(null);
+          setStatus("Refreshing your learning path...");
+          await refreshPanels(learner, currentTopic);
+          setStatus("Your path is up to date.");
+        } catch (refreshError) {
+          setError(authErrorMessage(refreshError, "Unable to refresh your path right now."));
+        }
+      })();
+    });
+  }
+
   if (authStatus === "loading") {
     return (
       <main className="landing-shell">
@@ -824,8 +843,12 @@ export function LearnerHome() {
               <div className="empty-card">
                 <strong>We&apos;re still building your path.</strong>
                 <p className="supporting-text compact-text">
-                  Once we have enough context, the next recommended concept will appear here.
+                  We couldn&apos;t find a next recommendation yet. Refresh to try again, or keep studying and we&apos;ll
+                  rebuild it from your progress.
                 </p>
+                <button className="ghost-button inline-button" onClick={handleRefreshPath} disabled={isPending}>
+                  Refresh path
+                </button>
               </div>
             )}
           </article>

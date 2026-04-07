@@ -1,8 +1,13 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import api_router
 from app.core.config import get_settings
+from app.services.bootstrap import ensure_starter_curriculum
+from app.services.database import SessionLocal
+from app.services.dependencies import get_curriculum_repository
 
 
 app = FastAPI(
@@ -13,6 +18,11 @@ app = FastAPI(
 
 settings = get_settings()
 
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()],
@@ -22,6 +32,15 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+
+
+@app.on_event("startup")
+def seed_starter_curriculum() -> None:
+    db = SessionLocal()
+    try:
+        ensure_starter_curriculum(get_curriculum_repository(db))
+    finally:
+        db.close()
 
 
 @app.get("/healthz")

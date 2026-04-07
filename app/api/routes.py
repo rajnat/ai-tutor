@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response
 from sqlalchemy.orm import Session as DbSession
 
@@ -22,6 +24,7 @@ from app.models.api import (
 )
 from app.models.domain import Account, AuthSession, Concept
 from app.core.config import get_settings
+from app.services.bootstrap import ensure_starter_curriculum
 from app.services.database import get_db_session
 from app.services.curriculum import CurriculumPlanner
 from app.services.dependencies import (
@@ -45,6 +48,7 @@ from app.services.lesson_planner import LessonPlannerService
 from app.services.content_library import ContentLibraryService
 
 api_router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger(__name__)
 
 
 def _set_auth_cookie(response: Response, token: str) -> None:
@@ -93,6 +97,30 @@ def _clear_csrf_cookie(response: Response) -> None:
         samesite="lax",
         path="/",
     )
+
+
+def _ensure_curriculum_seeded(db: DbSession) -> None:
+    ensure_starter_curriculum(get_curriculum_repository(db))
+
+
+def _normalize_topic_for_learner(db: DbSession, learner_id: str, requested_topic: str) -> str:
+    _ensure_curriculum_seeded(db)
+    curriculum_repository = get_curriculum_repository(db)
+    concept = curriculum_repository.get_by_slug(requested_topic)
+    if concept is not None:
+        return requested_topic
+
+    learner = get_learner_repository(db).get(learner_id)
+    concepts = curriculum_repository.list_concepts()
+    recommendations = CurriculumPlanner().suggest_next_topic(learner, concepts) if learner is not None else concepts
+    fallback = (recommendations[0].slug if recommendations else None) or "algebra"
+    logger.warning(
+        "Normalizing unknown topic for learner_id=%s requested_topic=%s fallback_topic=%s",
+        learner_id,
+        requested_topic,
+        fallback,
+    )
+    return fallback
 
 
 @api_router.post("/auth/signup", response_model=AuthResponse)
@@ -297,8 +325,15 @@ def get_curriculum_recommendations(
     if learner is None:
         raise HTTPException(status_code=404, detail="Learner not found")
 
+    _ensure_curriculum_seeded(db)
     concepts = get_curriculum_repository(db).list_concepts(subject=subject)
     recommendations = CurriculumPlanner().suggest_next_topic(learner, concepts)
+    logger.info(
+        "Loaded curriculum recommendations learner_id=%s subject=%s count=%s",
+        learner_id,
+        subject or "all",
+        len(recommendations),
+    )
     return [ConceptResponse.model_validate(concept) for concept in recommendations]
 
 
@@ -314,18 +349,31 @@ def get_lesson_plan(
     learner = get_learner_repository(db).get(learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="Learner not found")
-    concept = get_curriculum_repository(db).get_by_slug(topic)
+    normalized_topic = _normalize_topic_for_learner(db, learner_id, topic)
+    concept = get_curriculum_repository(db).get_by_slug(normalized_topic)
     if concept is None:
         raise HTTPException(status_code=404, detail="Concept not found")
 
     lesson_plan_repository = get_lesson_plan_repository(db)
-    lesson_plan = lesson_plan_repository.get_active(learner_id, topic)
+    lesson_plan = lesson_plan_repository.get_active(learner_id, normalized_topic)
     if lesson_plan is None:
-        content_snippets = ContentLibraryService().retrieve(topic_slug=topic, limit=3)
+        logger.info(
+            "Generating lesson plan learner_id=%s topic=%s",
+            learner_id,
+            normalized_topic,
+        )
+        content_snippets = ContentLibraryService().retrieve(topic_slug=normalized_topic, limit=3)
         lesson_plan = LessonPlannerService(
             lesson_plan_repository=lesson_plan_repository,
             llm_provider=get_orchestrator(db).lesson_planner.llm_provider,
         ).create_plan(learner=learner, concept=concept, content_snippets=content_snippets)
+    logger.info(
+        "Loaded lesson plan learner_id=%s requested_topic=%s normalized_topic=%s step_count=%s",
+        learner_id,
+        topic,
+        normalized_topic,
+        len(lesson_plan.steps),
+    )
     return LessonPlanResponse.model_validate(lesson_plan)
 
 
@@ -341,7 +389,15 @@ def create_session(
     if learner is None:
         raise HTTPException(status_code=404, detail="Learner not found")
 
-    session = get_session_repository(db).create(payload)
+    normalized_topic = _normalize_topic_for_learner(db, learner.id, payload.topic)
+    if normalized_topic != payload.topic:
+        logger.info(
+            "Rewriting session creation topic learner_id=%s requested_topic=%s normalized_topic=%s",
+            learner.id,
+            payload.topic,
+            normalized_topic,
+        )
+    session = get_session_repository(db).create(payload.model_copy(update={"topic": normalized_topic}))
     return SessionResponse.model_validate(session)
 
 
@@ -356,6 +412,17 @@ def get_session(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.learner_id != current_account.learner_id:
         raise HTTPException(status_code=403, detail="Forbidden")
+    normalized_topic = _normalize_topic_for_learner(db, session.learner_id, session.topic)
+    if normalized_topic != session.topic:
+        logger.info(
+            "Repairing stale session topic session_id=%s learner_id=%s from=%s to=%s",
+            session.id,
+            session.learner_id,
+            session.topic,
+            normalized_topic,
+        )
+        session.topic = normalized_topic
+        session = get_session_repository(db).save(session)
     return SessionResponse.model_validate(session)
 
 
@@ -371,6 +438,17 @@ def submit_turn(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.learner_id != current_account.learner_id:
         raise HTTPException(status_code=403, detail="Forbidden")
+    normalized_topic = _normalize_topic_for_learner(db, session.learner_id, session.topic)
+    if normalized_topic != session.topic:
+        logger.info(
+            "Repairing session topic before turn session_id=%s learner_id=%s from=%s to=%s",
+            session.id,
+            session.learner_id,
+            session.topic,
+            normalized_topic,
+        )
+        session.topic = normalized_topic
+        session = get_session_repository(db).save(session)
 
     learner = get_learner_repository(db).get(session.learner_id)
     if learner is None:
@@ -393,6 +471,9 @@ def create_concept(
     db: DbSession = Depends(get_db_session),
 ) -> ConceptResponse:
     require_admin_account(current_account)
+    existing = get_curriculum_repository(db).get_by_slug(payload.slug)
+    if existing is not None:
+        return ConceptResponse.model_validate(existing)
     objectives = ObjectiveGenerator().infer_objectives(
         concept_slug=payload.slug,
         concept_description=payload.description,

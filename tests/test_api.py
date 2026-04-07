@@ -63,6 +63,22 @@ def test_healthcheck() -> None:
         assert response.json() == {"status": "ok"}
 
 
+def test_starter_curriculum_is_seeded_on_startup() -> None:
+    migrate_test_db()
+    with TestClient(app) as client:
+        headers, auth_payload = signup_and_auth_headers(client, initial_topic="algebra")
+        learner_id = auth_payload["learner"]["id"]
+
+        recommendations = client.get(
+            f"/api/v1/learners/{learner_id}/curriculum/recommendations",
+            headers=headers,
+        )
+        assert recommendations.status_code == 200
+        payload = recommendations.json()
+        slugs = {item["slug"] for item in payload}
+        assert "algebra" in slugs
+
+
 def test_create_learner_start_session_and_submit_turn() -> None:
     migrate_test_db()
     with TestClient(app) as client:
