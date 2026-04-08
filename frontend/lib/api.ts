@@ -1,10 +1,13 @@
 import type {
   AuthPayload,
+  CheckpointAttemptResponse,
   Concept,
   Learner,
+  LessonWorkspace,
   LessonPlan,
   ReviewItem,
   Session,
+  StudySessionResponse,
   SubmitTurnResponse,
   SupplementalMaterial,
   TopicProgress
@@ -72,7 +75,7 @@ export function signup(payload: {
   email: string;
   password: string;
   name: string;
-  goal: string;
+  goal?: string;
   initial_topic?: string;
 }) {
   return request<AuthPayload>(
@@ -143,8 +146,26 @@ export function createSession(payload: {
   });
 }
 
+export function createStudySession(
+  learnerId: string,
+  payload: { prompt: string; mode?: "learn" | "ask" | "test" | "review" }
+) {
+  return request<StudySessionResponse>(`/learners/${learnerId}/study-session`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
 export function getSession(sessionId: string) {
   return request<Session>(`/sessions/${sessionId}`);
+}
+
+export async function getLatestSession(learnerId: string) {
+  try {
+    return await request<Session>(`/learners/${learnerId}/sessions/latest`);
+  } catch {
+    return null;
+  }
 }
 
 export function submitTurn(
@@ -188,6 +209,21 @@ export function getLessonPlan(learnerId: string, topic: string) {
   return request<LessonPlan>(
     `/learners/${learnerId}/lesson-plan?topic=${encodeURIComponent(topic)}`
   );
+}
+
+export function getLessonWorkspace(learnerId: string) {
+  return request<LessonWorkspace>(`/learners/${learnerId}/workspace`);
+}
+
+export function submitCheckpointAttempt(
+  learnerId: string,
+  checkpointId: string,
+  selectedOptionId: string
+) {
+  return request<CheckpointAttemptResponse>(`/learners/${learnerId}/checkpoints/${checkpointId}/attempt`, {
+    method: "POST",
+    body: JSON.stringify({ selected_option_id: selectedOptionId })
+  });
 }
 
 export function createConcept(payload: {

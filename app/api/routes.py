@@ -8,6 +8,7 @@ from app.models.api import (
     AuthResponse,
     CompleteReviewRequest,
     ConceptResponse,
+    CreateStudySessionRequest,
     CreateConceptRequest,
     CreateLearnerRequest,
     CreateSessionRequest,
@@ -21,6 +22,7 @@ from app.models.api import (
     SessionResponse,
     SubmitTurnRequest,
     SubmitTurnResponse,
+    StudySessionResponse,
 )
 from app.models.domain import Account, AuthSession, Concept
 from app.core.config import get_settings
@@ -41,11 +43,11 @@ from app.services.dependencies import (
     get_progress_service,
     get_review_repository,
     get_session_repository,
+    get_study_intent_service,
 )
 from app.services.objectives import ObjectiveGenerator
 from app.services.review import ReviewScheduler
 from app.services.lesson_planner import LessonPlannerService
-from app.services.content_library import ContentLibraryService
 
 api_router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger(__name__)
@@ -258,6 +260,38 @@ def get_learner(
     return LearnerResponse.model_validate(learner)
 
 
+@api_router.post("/learners/{learner_id}/study-session", response_model=StudySessionResponse)
+def create_study_session(
+    learner_id: str,
+    payload: CreateStudySessionRequest,
+    current_account: Account = Depends(require_csrf),
+    db: DbSession = Depends(get_db_session),
+) -> StudySessionResponse:
+    if learner_id != current_account.learner_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    learner = get_learner_repository(db).get(learner_id)
+    if learner is None:
+        raise HTTPException(status_code=404, detail="Learner not found")
+
+    updated_learner, concept, lesson_plan, session = get_study_intent_service(db).launch(
+        learner=learner,
+        prompt=payload.prompt,
+        mode=payload.mode.value,
+    )
+    logger.info(
+        "Created study session learner_id=%s topic=%s prompt=%s",
+        learner_id,
+        concept.slug,
+        payload.prompt,
+    )
+    return StudySessionResponse(
+        learner=LearnerResponse.model_validate(updated_learner),
+        concept=ConceptResponse.model_validate(concept),
+        lesson_plan=LessonPlanResponse.model_validate(lesson_plan),
+        session=SessionResponse.model_validate(session),
+    )
+
+
 @api_router.get("/learners/{learner_id}/progress/objectives", response_model=list[TopicProgressResponse])
 def get_objective_progress(
     learner_id: str,
@@ -362,11 +396,10 @@ def get_lesson_plan(
             learner_id,
             normalized_topic,
         )
-        content_snippets = ContentLibraryService().retrieve(topic_slug=normalized_topic, limit=3)
         lesson_plan = LessonPlannerService(
             lesson_plan_repository=lesson_plan_repository,
             llm_provider=get_orchestrator(db).lesson_planner.llm_provider,
-        ).create_plan(learner=learner, concept=concept, content_snippets=content_snippets)
+        ).create_plan(learner=learner, concept=concept, content_snippets=[])
     logger.info(
         "Loaded lesson plan learner_id=%s requested_topic=%s normalized_topic=%s step_count=%s",
         learner_id,
@@ -416,6 +449,32 @@ def get_session(
     if normalized_topic != session.topic:
         logger.info(
             "Repairing stale session topic session_id=%s learner_id=%s from=%s to=%s",
+            session.id,
+            session.learner_id,
+            session.topic,
+            normalized_topic,
+        )
+        session.topic = normalized_topic
+        session = get_session_repository(db).save(session)
+    return SessionResponse.model_validate(session)
+
+
+@api_router.get("/learners/{learner_id}/sessions/latest", response_model=SessionResponse)
+def get_latest_session(
+    learner_id: str,
+    current_account: Account = Depends(get_current_account),
+    db: DbSession = Depends(get_db_session),
+) -> SessionResponse:
+    if learner_id != current_account.learner_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    sessions = get_session_repository(db).list_for_learner(learner_id, limit=1)
+    if not sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = sessions[0]
+    normalized_topic = _normalize_topic_for_learner(db, session.learner_id, session.topic)
+    if normalized_topic != session.topic:
+        logger.info(
+            "Repairing latest session topic session_id=%s learner_id=%s from=%s to=%s",
             session.id,
             session.learner_id,
             session.topic,

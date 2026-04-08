@@ -194,12 +194,7 @@ class SessionOrchestrator:
             focus_objective=focus_objective,
             current_session=session,
         )
-        content_snippets = self.content_library.retrieve(
-            topic_slug=current_topic,
-            focus_objective=focus_objective,
-            limit=3,
-            preferred_types=("overview", "worked_example", "historical_context", "comparison"),
-        )
+        content_snippets = []
         lesson_plan: LessonPlan | None = None
         if current_concept is not None:
             try:

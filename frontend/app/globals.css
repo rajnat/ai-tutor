@@ -321,10 +321,28 @@ textarea {
   margin-top: 1rem;
 }
 
+.lesson-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) 340px;
+  gap: 1rem;
+  margin-top: 1rem;
+  align-items: start;
+}
+
 .lesson-panel {
   display: grid;
   grid-template-rows: auto 1fr auto;
   min-height: 62vh;
+}
+
+.lesson-panel-primary {
+  gap: 1rem;
+}
+
+.lesson-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
 }
 
 .message-stream {
@@ -362,12 +380,87 @@ textarea {
   font-size: 0.7rem;
 }
 
+.lesson-content-card,
+.lesson-example,
+.lesson-summary,
+.lesson-go-deeper,
+.lesson-checkpoint,
+.checkpoint-feedback {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.62);
+  padding: 1rem;
+}
+
+.lesson-content-card,
+.lesson-content-flow,
+.lesson-content-header,
+.checkpoint-options {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.lesson-content-header h4,
+.lesson-block-heading {
+  margin: 0;
+  font-size: 1.55rem;
+  letter-spacing: -0.03em;
+}
+
+.lesson-block-text {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.8;
+}
+
+.lesson-example strong,
+.lesson-summary strong,
+.lesson-checkpoint strong {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.checkpoint-options {
+  grid-template-columns: 1fr;
+}
+
+.checkpoint-option {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 0.75rem;
+  align-items: start;
+  text-align: left;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.8);
+  padding: 0.9rem;
+}
+
+.checkpoint-option.selected {
+  border-color: rgba(184, 86, 45, 0.5);
+  background: rgba(255, 246, 236, 0.98);
+}
+
+.checkpoint-feedback.correct {
+  border-color: rgba(47, 107, 74, 0.28);
+  background: rgba(235, 247, 239, 0.92);
+}
+
+.checkpoint-feedback.incorrect {
+  border-color: rgba(184, 86, 45, 0.28);
+  background: rgba(255, 245, 230, 0.92);
+}
+
 .composer-card,
 .objective-item,
 .study-plan,
 .lesson-plan-list {
   display: grid;
   gap: 0.75rem;
+}
+
+.compact-plan-list .plan-step {
+  padding: 0.75rem;
 }
 
 .study-step {
@@ -458,6 +551,7 @@ textarea {
 @media (max-width: 1120px) {
   .landing-grid,
   .learner-grid,
+  .lesson-layout,
   .hero-card {
     grid-template-columns: 1fr;
   }
@@ -487,6 +581,7 @@ textarea {
     align-items: flex-start;
   }
 
+  .lesson-actions,
   .topbar-actions,
   .landing-actions,
   .auth-tabs {

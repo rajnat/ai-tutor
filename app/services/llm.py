@@ -204,6 +204,32 @@ class StubResponsesProvider(LlmProvider):
         schema: type[SchemaT],
         schema_name: str,
     ) -> SchemaT:
+        if schema_name == "study_intent":
+            learner_request = ""
+            for line in prompt.splitlines():
+                if line.startswith("Learner request for today:"):
+                    learner_request = line.split(":", 1)[1].strip()
+                    break
+            title = learner_request.strip().rstrip(".?!") or "Custom Topic"
+            slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in title).strip("-")
+            slug = "-".join(part for part in slug.split("-") if part) or "custom-topic"
+            subject = "literature" if "literature" in title.lower() else "math" if any(
+                token in title.lower() for token in ("algebra", "calculus", "derivative", "equation")
+            ) else "general"
+            return schema.model_validate(
+                {
+                    "topic_slug": slug,
+                    "topic_title": title.title(),
+                    "subject": subject,
+                    "description": f"A focused lesson on {title.lower()} tailored to the learner's request.",
+                    "objective_titles": [
+                        "Core intuition",
+                        "Key vocabulary",
+                        "Basic application",
+                        "Check understanding",
+                    ],
+                }
+            )
         if schema_name == "lesson_plan":
             objective_fields: list[tuple[str | None, str | None, str]] = []
             for line in prompt.splitlines():

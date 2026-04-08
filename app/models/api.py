@@ -23,7 +23,7 @@ from app.models.domain import (
 
 class CreateLearnerRequest(BaseModel):
     name: str = Field(min_length=1)
-    goal: str = Field(min_length=1)
+    goal: str = Field(default="Keep learning with Adaptive Tutor", min_length=1)
     initial_topic: str | None = None
     preferences: LearningPreferences = Field(default_factory=LearningPreferences)
 
@@ -56,13 +56,18 @@ class SignupRequest(BaseModel):
     email: str = Field(min_length=3)
     password: str = Field(min_length=8)
     name: str = Field(min_length=1)
-    goal: str = Field(min_length=1)
+    goal: str = Field(default="Keep learning with Adaptive Tutor", min_length=1)
     initial_topic: str | None = None
 
 
 class LoginRequest(BaseModel):
     email: str = Field(min_length=3)
     password: str = Field(min_length=8)
+
+
+class CreateStudySessionRequest(BaseModel):
+    prompt: str = Field(min_length=3)
+    mode: SessionMode = SessionMode.LEARN
 
 
 class AccountResponse(Account):
@@ -123,3 +128,10 @@ class SubmitTurnResponse(BaseModel):
     active_lesson_step: LessonPlanStepResponse | None = None
     updated_learner: LearnerResponse
     updated_session: SessionResponse
+
+
+class StudySessionResponse(BaseModel):
+    learner: LearnerResponse
+    concept: ConceptResponse
+    lesson_plan: LessonPlanResponse
+    session: SessionResponse

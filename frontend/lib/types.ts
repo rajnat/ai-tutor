@@ -120,6 +120,38 @@ export type LessonPlan = {
   updated_at: string;
 };
 
+export type CheckpointOption = {
+  id: string;
+  label: string;
+  text: string;
+};
+
+export type LessonCheckpoint = {
+  id: string;
+  kind: "mcq" | "short_answer";
+  prompt: string;
+  objective_id: string | null;
+  objective_slug: string | null;
+  options: CheckpointOption[];
+  correct_option_id: string | null;
+  explanation: string;
+};
+
+export type LessonContentBlock = {
+  id: string;
+  type: "heading" | "paragraph" | "example" | "checkpoint_mcq" | "summary" | "go_deeper";
+  text: string | null;
+  checkpoint: LessonCheckpoint | null;
+  prompts: string[];
+};
+
+export type LessonSectionContent = {
+  title: string;
+  subtitle: string | null;
+  blocks: LessonContentBlock[];
+  trace: GenerationTrace | null;
+};
+
 export type ObjectiveProgress = {
   objective: ConceptObjective;
   mastery: number;
@@ -176,4 +208,26 @@ export type AuthPayload = {
   token: string;
   account: Account;
   learner: Learner;
+};
+
+export type StudySessionResponse = {
+  learner: Learner;
+  concept: Concept;
+  lesson_plan: LessonPlan;
+  session: Session;
+};
+
+export type LessonWorkspace = {
+  session: Session;
+  lesson_plan: LessonPlan;
+  active_step: LessonPlanStep | null;
+  section_content: LessonSectionContent;
+};
+
+export type CheckpointAttemptResponse = {
+  checkpoint_id: string;
+  is_correct: boolean;
+  explanation: string;
+  recommended_action: string;
+  updated_learner: Learner;
 };

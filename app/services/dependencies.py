@@ -27,6 +27,7 @@ from app.services.repositories import (
 from app.services.materials import SupplementalMaterialService
 from app.services.review import ReviewScheduler
 from app.services.teaching import OpenAITeachingService
+from app.services.study_intent import StudyIntentService
 from app.core.config import get_settings
 
 
@@ -157,4 +158,17 @@ def get_orchestrator(db: DbSession) -> SessionOrchestrator:
         review_scheduler=ReviewScheduler(),
         objective_generator=ObjectiveGenerator(),
         teacher=get_teacher(),
+    )
+
+
+def get_study_intent_service(db: DbSession) -> StudyIntentService:
+    return StudyIntentService(
+        curriculum_repository=get_curriculum_repository(db),
+        learner_repository=get_learner_repository(db),
+        session_repository=get_session_repository(db),
+        lesson_planner=LessonPlannerService(
+            lesson_plan_repository=get_lesson_plan_repository(db),
+            llm_provider=get_llm_provider(),
+        ),
+        llm_provider=get_llm_provider(),
     )

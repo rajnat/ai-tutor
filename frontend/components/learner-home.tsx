@@ -5,31 +5,33 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   clearAuthSession,
   completeReview,
-  createSession,
+  createStudySession,
   getCurrentAuth,
-  getCurriculumRecommendations,
   getDueReviews,
   getLessonPlan,
-  getMaterialSuggestions,
+  getLessonWorkspace,
+  getLatestSession,
   getProgress,
   getSession,
   login,
   logout,
   setAuthToken,
   signup,
+  submitCheckpointAttempt,
   submitTurn
 } from "@/lib/api";
 import type {
   Account,
   AuthPayload,
-  Concept,
+  CheckpointAttemptResponse,
   Learner,
+  LessonContentBlock,
+  LessonWorkspace,
   LessonPlan,
   LessonPlanStep,
   ObjectiveProgress,
   ReviewItem,
   Session,
-  SupplementalMaterial,
   TopicProgress
 } from "@/lib/types";
 
@@ -46,8 +48,6 @@ type SignupForm = {
   name: string;
   email: string;
   password: string;
-  goal: string;
-  initialTopic: string;
 };
 
 type LoginForm = {
@@ -63,8 +63,6 @@ const DEFAULT_SIGNUP_FORM: SignupForm = {
   name: "",
   email: "",
   password: "",
-  goal: "Learn algebra deeply",
-  initialTopic: "algebra"
 };
 
 const DEFAULT_LOGIN_FORM: LoginForm = {
@@ -105,19 +103,6 @@ function getWeakestObjective(progressItem?: TopicProgress): ObjectiveProgress | 
   return [...progressItem.objectives].sort((left, right) => left.mastery - right.mastery)[0];
 }
 
-function getDefaultTopic(learner: Learner, preferredTopic?: string) {
-  if (preferredTopic && preferredTopic.trim()) {
-    return preferredTopic.trim();
-  }
-
-  const practicedTopics = Object.keys(learner.skills);
-  if (practicedTopics.length > 0) {
-    return practicedTopics[0];
-  }
-
-  return "algebra";
-}
-
 function formatDueLabel(isoDate: string) {
   const date = new Date(isoDate);
   if (Number.isNaN(date.getTime())) {
@@ -145,11 +130,13 @@ export function LearnerHome() {
   const [session, setSession] = useState<Session | null>(null);
   const [progress, setProgress] = useState<TopicProgress[]>([]);
   const [lessonPlan, setLessonPlan] = useState<LessonPlan | null>(null);
-  const [recommendations, setRecommendations] = useState<Concept[]>([]);
+  const [workspace, setWorkspace] = useState<LessonWorkspace | null>(null);
   const [reviews, setReviews] = useState<ReviewItem[]>([]);
-  const [materials, setMaterials] = useState<SupplementalMaterial[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [reviewAnswers, setReviewAnswers] = useState<Record<string, string>>({});
+  const [checkpointSelections, setCheckpointSelections] = useState<Record<string, string>>({});
+  const [checkpointResults, setCheckpointResults] = useState<Record<string, CheckpointAttemptResponse>>({});
+  const [studyIntent, setStudyIntent] = useState("");
   const [draft, setDraft] = useState("");
   const [signupForm, setSignupForm] = useState<SignupForm>(DEFAULT_SIGNUP_FORM);
   const [loginForm, setLoginForm] = useState<LoginForm>(DEFAULT_LOGIN_FORM);
@@ -157,16 +144,12 @@ export function LearnerHome() {
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  const currentTopic = session?.topic ?? (learner ? getDefaultTopic(learner) : "algebra");
+  const currentTopic = session?.topic ?? "";
   const currentProgress = useMemo(
     () => progress.find((item) => item.concept.slug === currentTopic),
     [progress, currentTopic]
   );
   const focusObjective = useMemo(() => getWeakestObjective(currentProgress), [currentProgress]);
-  const nextRecommendation = useMemo(
-    () => recommendations.find((item) => item.slug !== currentTopic) ?? recommendations[0] ?? null,
-    [recommendations, currentTopic]
-  );
   const currentMastery = currentProgress ? Math.round(currentProgress.concept_mastery * 100) : 0;
   const currentLessonStep = useMemo(() => {
     if (!lessonPlan) {
@@ -175,23 +158,55 @@ export function LearnerHome() {
     return lessonPlan.steps[lessonPlan.current_step_index] ?? lessonPlan.steps[0] ?? null;
   }, [lessonPlan]);
 
+  async function refreshWorkspace(learnerId: string) {
+    const nextWorkspace = await getLessonWorkspace(learnerId).catch(() => null);
+    setWorkspace(nextWorkspace);
+    if (nextWorkspace) {
+      setLessonPlan(nextWorkspace.lesson_plan);
+      setSession(nextWorkspace.session);
+    }
+    return nextWorkspace;
+  }
+
   async function refreshPanels(nextLearner: Learner, nextTopic: string) {
-    const [nextProgress, nextReviews, nextMaterials, nextRecommendations, nextLessonPlan] = await Promise.all([
-      getProgress(nextLearner.id).catch(() => []),
-      getDueReviews(nextLearner.id).catch(() => []),
-      getMaterialSuggestions(nextLearner.id, nextTopic).catch(() => []),
-      getCurriculumRecommendations(nextLearner.id).catch(() => []),
-      getLessonPlan(nextLearner.id, nextTopic).catch(() => null)
+    setError(null);
+    const [nextProgressResult, nextReviewsResult, nextLessonPlanResult, nextWorkspaceResult] = await Promise.allSettled([
+      getProgress(nextLearner.id),
+      getDueReviews(nextLearner.id),
+      getLessonPlan(nextLearner.id, nextTopic),
+      getLessonWorkspace(nextLearner.id),
     ]);
+
+    const nextProgress = nextProgressResult.status === "fulfilled" ? nextProgressResult.value : [];
+    const nextReviews = nextReviewsResult.status === "fulfilled" ? nextReviewsResult.value : [];
+    const nextLessonPlan = nextLessonPlanResult.status === "fulfilled" ? nextLessonPlanResult.value : null;
+    const nextWorkspace = nextWorkspaceResult.status === "fulfilled" ? nextWorkspaceResult.value : null;
 
     setProgress(nextProgress);
     setReviews(nextReviews);
-    setMaterials(nextMaterials);
-    setRecommendations(nextRecommendations);
-    setLessonPlan(nextLessonPlan);
+    setLessonPlan(nextWorkspace?.lesson_plan ?? nextLessonPlan);
+    setWorkspace(nextWorkspace);
+    if (nextWorkspace) {
+      setSession(nextWorkspace.session);
+    }
+
+    const failures = [
+      nextProgressResult.status === "rejected" ? "progress" : null,
+      nextReviewsResult.status === "rejected" ? "reviews" : null,
+      nextLessonPlanResult.status === "rejected" ? "lesson plan" : null,
+      nextWorkspaceResult.status === "rejected" ? "lesson workspace" : null
+    ].filter(Boolean);
+
+    if (failures.length > 0) {
+      const label = failures.join(", ");
+      setError(`Some parts of your study home failed to load: ${label}. Check the API logs for details.`);
+      setStatus("Some study panels did not load cleanly.");
+    } else {
+      setError(null);
+    }
   }
 
-  function syncMessages(nextSession: Session, nextLearner: Learner) {
+  function syncMessages(nextSession: Session, nextLearner: Learner, nextLessonPlan?: LessonPlan | null) {
     if (nextSession.turns.length > 0) {
       setMessages(
         nextSession.turns.flatMap((turn) => [
@@ -209,42 +224,54 @@ export function LearnerHome() {
       return;
     }
 
+    const kickoff = nextLessonPlan?.steps[nextLessonPlan.current_step_index] ?? nextLessonPlan?.steps[0] ?? null;
     setMessages([
       {
         role: "tutor",
-        text: `Welcome back, ${nextLearner.name}. Let's continue with ${nextSession.topic}.`
+        text: kickoff
+          ? `Welcome back, ${nextLearner.name}. We’re starting with ${kickoff.title.toLowerCase()} in ${nextSession.topic}. ${kickoff.instruction}`
+          : `Welcome back, ${nextLearner.name}. Let's continue with ${nextSession.topic}. Tell me what already makes sense and what feels fuzzy.`
       }
     ]);
   }
 
-  async function ensureSession(nextLearner: Learner, preferredTopic?: string) {
+  async function loadStoredSession(nextLearner: Learner) {
     const storageKey = sessionStorageKey(nextLearner.id);
     const storedSessionId = safeStorageGet(storageKey);
-    const fallbackTopic = getDefaultTopic(nextLearner, preferredTopic);
-
-    let activeSession = storedSessionId ? await getSession(storedSessionId).catch(() => null) : null;
-    if (!activeSession || activeSession.learner_id !== nextLearner.id) {
-      activeSession = await createSession({
-        learner_id: nextLearner.id,
-        topic: fallbackTopic,
-        mode: "learn"
-      });
-      safeStorageSet(storageKey, activeSession.id);
+    const storedSession = storedSessionId ? await getSession(storedSessionId).catch(() => null) : null;
+    if (storedSession && storedSession.learner_id === nextLearner.id) {
+      return storedSession;
     }
 
-    return activeSession;
+    const latestSession = await getLatestSession(nextLearner.id);
+    if (latestSession) {
+      safeStorageSet(storageKey, latestSession.id);
+    }
+    return latestSession;
   }
 
-  async function loadAuthenticatedHome(authPayload: AuthPayload, preferredTopic?: string) {
-    const activeSession = await ensureSession(authPayload.learner, preferredTopic);
-
+  async function loadAuthenticatedHome(authPayload: AuthPayload) {
     setAccount(authPayload.account);
     setLearner(authPayload.learner);
-    setSession(activeSession);
-    syncMessages(activeSession, authPayload.learner);
-    await refreshPanels(authPayload.learner, activeSession.topic);
+    const activeSession = await loadStoredSession(authPayload.learner);
+    if (activeSession) {
+      const activeWorkspace = await refreshWorkspace(authPayload.learner.id);
+      const activeLessonPlan = activeWorkspace?.lesson_plan ?? await getLessonPlan(authPayload.learner.id, activeSession.topic).catch(() => null);
+      setSession(activeWorkspace?.session ?? activeSession);
+      syncMessages(activeWorkspace?.session ?? activeSession, authPayload.learner, activeLessonPlan);
+      setLessonPlan(activeLessonPlan);
+      await refreshPanels(authPayload.learner, activeSession.topic);
+      setStatus("Ready when you are.");
+    } else {
+      setSession(null);
+      setLessonPlan(null);
+      setWorkspace(null);
+      setMessages([]);
+      setProgress([]);
+      setReviews([]);
+      setStatus("What do you want to learn today?");
+    }
     setAuthStatus("authenticated");
-    setStatus("Ready when you are.");
   }
 
   useEffect(() => {
@@ -279,12 +306,10 @@ export function LearnerHome() {
           const authPayload = await signup({
             email: signupForm.email.trim(),
             password: signupForm.password,
-            name: signupForm.name.trim(),
-            goal: signupForm.goal.trim(),
-            initial_topic: signupForm.initialTopic.trim() || undefined
+            name: signupForm.name.trim()
           });
           setAuthToken(authPayload.token);
-          await loadAuthenticatedHome(authPayload, signupForm.initialTopic);
+          await loadAuthenticatedHome(authPayload);
         } catch (signupError) {
           setError(authErrorMessage(signupError, "Unable to create your account."));
           setStatus("Create your account to start learning.");
@@ -328,10 +353,13 @@ export function LearnerHome() {
           setSession(null);
           setProgress([]);
           setLessonPlan(null);
+          setWorkspace(null);
           setReviews([]);
-          setMaterials([]);
           setMessages([]);
           setReviewAnswers({});
+          setCheckpointSelections({});
+          setCheckpointResults({});
+          setStudyIntent("");
           setDraft("");
           setError(null);
           setAuthStatus("signed_out");
@@ -341,12 +369,10 @@ export function LearnerHome() {
     });
   }
 
-  function handleSend() {
-    if (!learner || !session || !draft.trim()) {
+  function submitLearnerMessage(learnerMessage: string) {
+    if (!learner || !session || !learnerMessage.trim()) {
       return;
     }
-
-    const learnerMessage = draft.trim();
     setDraft("");
     setMessages((current) => [...current, { role: "learner", text: learnerMessage }]);
 
@@ -374,11 +400,28 @@ export function LearnerHome() {
               : `You advanced to ${response.updated_session.topic}.`
           );
           await refreshPanels(response.updated_learner, response.updated_session.topic);
+          setCheckpointSelections({});
+          setCheckpointResults({});
         } catch (turnError) {
           setError(authErrorMessage(turnError, "Unable to continue the lesson."));
         }
       })();
     });
+  }
+
+  function handleSend() {
+    if (!draft.trim()) {
+      return;
+    }
+    submitLearnerMessage(draft.trim());
+  }
+
+  function handleQuickPrompt(message: string) {
+    setDraft(message);
+  }
+
+  function handleQuickStart(message: string) {
+    submitLearnerMessage(message);
   }
 
   function handleReview(reviewId: string) {
@@ -410,6 +453,116 @@ export function LearnerHome() {
     });
   }
 
+  function handleCheckpointSubmit(checkpointId: string) {
+    if (!learner) {
+      return;
+    }
+    const selectedOptionId = checkpointSelections[checkpointId];
+    if (!selectedOptionId) {
+      setError("Choose an answer before submitting the checkpoint.");
+      return;
+    }
+
+    startTransition(() => {
+      void (async () => {
+        try {
+          setError(null);
+          const result = await submitCheckpointAttempt(learner.id, checkpointId, selectedOptionId);
+          setCheckpointResults((current) => ({ ...current, [checkpointId]: result }));
+          setLearner(result.updated_learner);
+          await refreshPanels(result.updated_learner, currentTopic);
+          setStatus(result.is_correct ? "Checkpoint complete." : "Let's reinforce that idea.");
+        } catch (checkpointError) {
+          setError(authErrorMessage(checkpointError, "Unable to submit that checkpoint."));
+        }
+      })();
+    });
+  }
+
+  function renderLessonBlock(block: LessonContentBlock) {
+    if (block.type === "heading" && block.text) {
+      return <h4 className="lesson-block-heading">{block.text}</h4>;
+    }
+    if (block.type === "paragraph" && block.text) {
+      return <p className="lesson-block-text">{block.text}</p>;
+    }
+    if (block.type === "example" && block.text) {
+      return (
+        <div className="lesson-example">
+          <strong>Example</strong>
+          <p className="lesson-block-text">{block.text}</p>
+        </div>
+      );
+    }
+    if (block.type === "summary" && block.text) {
+      return (
+        <div className="lesson-summary">
+          <strong>Summary</strong>
+          <p className="lesson-block-text">{block.text}</p>
+        </div>
+      );
+    }
+    if (block.type === "go_deeper") {
+      return (
+        <div className="lesson-go-deeper">
+          <span className="mini-tag">Go deeper</span>
+          <div className="lesson-actions">
+            {block.prompts.map((prompt) => (
+              <button
+                key={prompt}
+                className="ghost-button"
+                onClick={() => handleQuickStart(prompt)}
+                disabled={isPending || !session}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    if (block.type === "checkpoint_mcq" && block.checkpoint) {
+      const result = checkpointResults[block.checkpoint.id];
+      const selected = checkpointSelections[block.checkpoint.id];
+      return (
+        <div className="lesson-checkpoint">
+          <span className="mini-tag">Quick check</span>
+          <strong>{block.checkpoint.prompt}</strong>
+          <div className="checkpoint-options">
+            {block.checkpoint.options.map((option) => (
+              <button
+                key={option.id}
+                className={`checkpoint-option ${selected === option.id ? "selected" : ""}`}
+                onClick={() =>
+                  setCheckpointSelections((current) => ({ ...current, [block.checkpoint!.id]: option.id }))
+                }
+                disabled={isPending || Boolean(result)}
+              >
+                <span>{option.label}</span>
+                <span>{option.text}</span>
+              </button>
+            ))}
+          </div>
+          {result ? (
+            <div className={`checkpoint-feedback ${result.is_correct ? "correct" : "incorrect"}`}>
+              <strong>{result.is_correct ? "Correct" : "Not quite"}</strong>
+              <p className="lesson-block-text">{result.explanation}</p>
+            </div>
+          ) : (
+            <button
+              className="primary-button"
+              onClick={() => handleCheckpointSubmit(block.checkpoint!.id)}
+              disabled={isPending || !selected}
+            >
+              Submit check
+            </button>
+          )}
+        </div>
+      );
+    }
+    return null;
+  }
+
   function describeStepType(step: LessonPlanStep | null) {
     if (!step) {
       return "We’ll adapt the lesson structure once the tutor has more context.";
@@ -439,8 +592,13 @@ export function LearnerHome() {
     return index < lessonPlan.current_step_index ? "completed" : "upcoming";
   }
 
-  function handleStartRecommendation(topicSlug: string) {
+  function handleStartStudyIntent(prefill?: string) {
     if (!learner) {
+      return;
+    }
+    const prompt = (prefill ?? studyIntent).trim();
+    if (!prompt) {
+      setError("Tell the tutor what you want to learn today.");
       return;
     }
 
@@ -448,37 +606,22 @@ export function LearnerHome() {
       void (async () => {
         try {
           setError(null);
-          const nextSession = await createSession({
-            learner_id: learner.id,
-            topic: topicSlug,
+          setStatus("Building your lesson...");
+          const response = await createStudySession(learner.id, {
+            prompt,
             mode: "learn"
           });
-          setSession(nextSession);
-          safeStorageSet(sessionStorageKey(learner.id), nextSession.id);
-          syncMessages(nextSession, learner);
-          await refreshPanels(learner, nextSession.topic);
-          setStatus(`Starting ${topicSlug}.`);
-        } catch (sessionError) {
-          setError(authErrorMessage(sessionError, "Unable to start that lesson."));
-        }
-      })();
-    });
-  }
-
-  function handleRefreshPath() {
-    if (!learner) {
-      return;
-    }
-
-    startTransition(() => {
-      void (async () => {
-        try {
-          setError(null);
-          setStatus("Refreshing your learning path...");
-          await refreshPanels(learner, currentTopic);
-          setStatus("Your path is up to date.");
-        } catch (refreshError) {
-          setError(authErrorMessage(refreshError, "Unable to refresh your path right now."));
+          setLearner(response.learner);
+          setSession(response.session);
+          setLessonPlan(response.lesson_plan);
+          await refreshWorkspace(response.learner.id);
+          setStudyIntent("");
+          safeStorageSet(sessionStorageKey(response.learner.id), response.session.id);
+          syncMessages(response.session, response.learner, response.lesson_plan);
+          await refreshPanels(response.learner, response.session.topic);
+          setStatus(`Ready to learn ${response.concept.title}.`);
+        } catch (studyError) {
+          setError(authErrorMessage(studyError, "Unable to build your lesson right now."));
         }
       })();
     });
@@ -569,7 +712,7 @@ export function LearnerHome() {
                 <div>
                   <p className="section-label">Get Started</p>
                   <h3>Create your learner account</h3>
-                  <p className="supporting-text">We’ll use your goal and starting topic to open your first study session.</p>
+                  <p className="supporting-text">Create your account first. We&apos;ll ask what you want to learn after you sign in.</p>
                 </div>
 
                 <input
@@ -589,16 +732,6 @@ export function LearnerHome() {
                   value={signupForm.password}
                   onChange={(event) => setSignupForm((current) => ({ ...current, password: event.target.value }))}
                 />
-                <input
-                  placeholder="What do you want to learn?"
-                  value={signupForm.goal}
-                  onChange={(event) => setSignupForm((current) => ({ ...current, goal: event.target.value }))}
-                />
-                <input
-                  placeholder="Starting topic"
-                  value={signupForm.initialTopic}
-                  onChange={(event) => setSignupForm((current) => ({ ...current, initialTopic: event.target.value }))}
-                />
                 <button
                   className="primary-button"
                   onClick={handleSignup}
@@ -606,8 +739,7 @@ export function LearnerHome() {
                     isPending ||
                     !signupForm.name.trim() ||
                     !signupForm.email.trim() ||
-                    !signupForm.password ||
-                    !signupForm.goal.trim()
+                    !signupForm.password
                   }
                 >
                   Sign up
@@ -671,120 +803,219 @@ export function LearnerHome() {
         </div>
       </header>
 
-      <section className="hero-card">
-        <div>
-          <p className="section-label">Current Goal</p>
-          <h2>{learner?.goal ?? "Keep learning"}</h2>
-          <p className="supporting-text">
-            Your study home should tell you what matters right now, then help you continue without extra setup.
-          </p>
-        </div>
-        <div className="hero-metrics">
-          <article className="metric-card">
-            <span>Today&apos;s focus</span>
-            <strong>{session?.topic ?? "Choose a topic"}</strong>
+      {!session ? (
+        <section className="landing-grid">
+          <article className="panel landing-hero">
+            <p className="section-label">Start Today</p>
+            <h2>What do you want to learn today?</h2>
+            <p className="supporting-text">
+              Tell the tutor what you want to work on in plain language. We&apos;ll generate the lesson plan, objectives,
+              and first teaching step from that request.
+            </p>
+            <textarea
+              rows={4}
+              placeholder="Examples: Learn the basics of neural networks, understand Russian literature, prepare for a system design interview."
+              value={studyIntent}
+              onChange={(event) => setStudyIntent(event.target.value)}
+            />
+            <div className="landing-actions">
+              <button
+                className="primary-button"
+                onClick={() => handleStartStudyIntent()}
+                disabled={isPending || !studyIntent.trim()}
+              >
+                Build my lesson
+              </button>
+            </div>
+            <div className="feature-grid">
+              {[
+                "Learn the basics of neural networks",
+                "Understand Russian literature",
+                "Practice system design interviews",
+              ].map((example) => (
+                <button
+                  key={example}
+                  className="info-tile"
+                  onClick={() => setStudyIntent(example)}
+                  disabled={isPending}
+                >
+                  <strong>{example}</strong>
+                  <p className="supporting-text compact-text">Use this as today&apos;s study prompt.</p>
+                </button>
+              ))}
+            </div>
           </article>
-          <article className="metric-card">
-            <span>Needs practice</span>
-            <strong>{focusObjective?.objective.title ?? "Building foundations"}</strong>
-          </article>
-          <article className="metric-card">
-            <span>Current mastery</span>
-            <strong>{currentMastery}%</strong>
-          </article>
-        </div>
-      </section>
 
-      <section className="learner-grid">
-        <div className="main-column">
-          <article className="panel">
-            <div className="section-header">
+          <aside className="panel auth-panel">
+            <div className="auth-stack">
               <div>
-                <p className="section-label">Continue Learning</p>
-                <h3>{session?.topic ?? "Start your next lesson"}</h3>
+                <p className="section-label">How It Works</p>
+                <h3>No preloaded course required</h3>
+                <p className="supporting-text">
+                  We generate today&apos;s curriculum after you tell us what you want to learn, then turn it into a live
+                  tutoring session.
+                </p>
+              </div>
+              <div className="info-tile">
+                <strong>1. State your goal</strong>
+                <p className="supporting-text compact-text">Use natural language instead of picking from a rigid catalog.</p>
+              </div>
+              <div className="info-tile">
+                <strong>2. Get a lesson plan</strong>
+                <p className="supporting-text compact-text">The tutor creates objectives, sequence, and a first step.</p>
+              </div>
+              <div className="info-tile">
+                <strong>3. Start learning</strong>
+                <p className="supporting-text compact-text">The conversation begins with a concrete first move, not a blank screen.</p>
+              </div>
+              <p className="supporting-text compact-text">{status}</p>
+              {error ? <p className="error-text">{error}</p> : null}
+            </div>
+          </aside>
+        </section>
+      ) : (
+      <>
+      <section className="lesson-layout">
+        <div className="main-column">
+          <article className="panel lesson-panel lesson-panel-primary">
+            <div className="panel-heading">
+              <div>
+                <p className="section-label">Lesson</p>
+                <h3>{session?.topic ?? "Your lesson"}</h3>
+                <p className="supporting-text compact-text">
+                  {currentLessonStep
+                    ? `Current step: ${currentLessonStep.title}. ${currentLessonStep.instruction}`
+                    : "Start with a guided action below and the tutor will take the lead."}
+                </p>
               </div>
               <span className={`badge ${currentProgress?.ready_to_advance ? "ready" : "active"}`}>
                 {currentProgress?.ready_to_advance ? "Ready to move on" : "Keep practicing"}
               </span>
             </div>
-            <p className="supporting-text">
-              {focusObjective
-                ? `Right now the tutor is watching ${focusObjective.objective.title.toLowerCase()} most closely.`
-                : "The tutor will adapt once you begin answering questions."}
-            </p>
-            <div className="study-plan">
-              <div className="study-step">
-                <span className="mini-tag">Now</span>
-                <p className="supporting-text compact-text">Continue working in {session?.topic ?? "your current lesson"}.</p>
-              </div>
-              <div className="study-step">
-                <span className="mini-tag">Focus</span>
-                <p className="supporting-text compact-text">
-                  {focusObjective
-                    ? `${focusObjective.objective.title} is the weakest objective on this concept.`
-                    : "The tutor will identify a focus area after a few turns."}
-                </p>
-              </div>
-              <div className="study-step">
-                <span className="mini-tag">Next</span>
-                <p className="supporting-text compact-text">
-                  {nextRecommendation
-                    ? `${nextRecommendation.title} is the most likely next concept in your path.`
-                    : "As you build momentum, the next recommended concept will show up here."}
-                </p>
-              </div>
-            </div>
-          </article>
 
-          <article className="panel">
-            <div className="section-header">
-              <div>
-                <p className="section-label">Lesson Plan</p>
-                <h3>{lessonPlan?.summary ?? "Your tutor is building a plan for this topic."}</h3>
-              </div>
-              <span className="badge active">{describeStepType(currentLessonStep)}</span>
-            </div>
-            {currentLessonStep ? (
-              <div className="plan-highlight">
-                <strong>{currentLessonStep.title}</strong>
-                <p className="supporting-text compact-text">{currentLessonStep.instruction}</p>
-                <p className="supporting-text compact-text">{currentLessonStep.rationale}</p>
-              </div>
-            ) : null}
-            <div className="lesson-plan-list">
-              {lessonPlan?.steps.map((step, index) => {
-                const stepState = getStepState(step, index);
-                return (
-                  <div key={step.id} className={`plan-step ${stepState}`}>
-                    <div className="objective-title-row">
-                      <strong>
-                        {index + 1}. {step.title}
-                      </strong>
-                      <span className={`mini-tag ${stepState === "active" ? "active-tag" : stepState === "completed" ? "completed-tag" : ""}`}>
-                        {stepState === "completed" ? "done" : stepState === "active" ? "active" : step.step_type}
-                      </span>
-                    </div>
-                    <p className="supporting-text compact-text">{step.instruction}</p>
-                  </div>
-                );
-              })}
-            </div>
-            {lessonPlan?.trace ? (
-              <p className="supporting-text compact-text">
-                Planned with {lessonPlan.trace.provider} using {lessonPlan.trace.model}.
-              </p>
-            ) : null}
-          </article>
-
-          <article className="panel lesson-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Lesson</p>
-                <h3>Work through the idea with your tutor</h3>
-              </div>
+            <div className="lesson-actions">
+              <button
+                className="primary-button"
+                onClick={() =>
+                  handleQuickStart(
+                    currentLessonStep
+                      ? `I'm ready. Start with "${currentLessonStep.title}" and guide me step by step.`
+                      : `I'm ready to continue with ${session?.topic ?? "this lesson"}.`
+                  )
+                }
+                disabled={isPending || !session}
+              >
+                Resume lesson
+              </button>
+              <button
+                className="ghost-button"
+                onClick={() =>
+                  handleQuickStart(
+                    focusObjective
+                      ? `Explain ${focusObjective.objective.title.toLowerCase()} in a simpler way.`
+                      : `Explain the core idea in ${session?.topic ?? "this topic"} more simply.`
+                  )
+                }
+                disabled={isPending || !session}
+              >
+                Explain differently
+              </button>
+              <button
+                className="ghost-button"
+                onClick={() =>
+                  handleQuickStart(
+                    focusObjective
+                      ? `Give me one short practice question on ${focusObjective.objective.title.toLowerCase()}.`
+                      : `Give me one short practice question on ${session?.topic ?? "this topic"}.`
+                  )
+                }
+                disabled={isPending || !session}
+              >
+                Practice now
+              </button>
+              <button
+                className="ghost-button"
+                onClick={() => {
+                  if (learner) {
+                    safeStorageRemove(sessionStorageKey(learner.id));
+                  }
+                  setSession(null);
+                  setLessonPlan(null);
+                  setMessages([]);
+                  setProgress([]);
+                  setReviews([]);
+                  setDraft("");
+                  setStatus("What do you want to learn today?");
+                }}
+                disabled={isPending}
+              >
+                Learn something else
+              </button>
             </div>
 
             <div className="message-stream">
+              {workspace?.section_content ? (
+                <div className="lesson-content-card">
+                  <div className="lesson-content-header">
+                    <p className="section-label">Section</p>
+                    <h4>{workspace.section_content.title}</h4>
+                    {workspace.section_content.subtitle ? (
+                      <p className="supporting-text compact-text">{workspace.section_content.subtitle}</p>
+                    ) : null}
+                  </div>
+                  <div className="lesson-content-flow">
+                    {workspace.section_content.blocks.map((block) => (
+                      <div key={block.id}>{renderLessonBlock(block)}</div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {session?.turns.length === 0 ? (
+                <div className="plan-highlight">
+                  <strong>{currentLessonStep?.title ?? `Start learning ${session?.topic ?? ""}`}</strong>
+                  <p className="supporting-text compact-text">
+                    {currentLessonStep?.instruction ??
+                      "Choose one of the guided starts below and the tutor will take the first step with you."}
+                  </p>
+                  <div className="landing-actions">
+                    <button
+                      className="primary-button"
+                      onClick={() =>
+                        handleQuickStart(
+                          currentLessonStep
+                            ? `Teach me ${currentLessonStep.title.toLowerCase()} from the beginning with one simple example.`
+                            : `Teach me the core idea in ${session?.topic ?? "this topic"} from the beginning.`
+                        )
+                      }
+                      disabled={isPending || !session}
+                    >
+                      Start guided lesson
+                    </button>
+                    <button
+                      className="ghost-button"
+                      onClick={() =>
+                        handleQuickStart(
+                          `Ask me one short diagnostic question about ${session?.topic ?? "this topic"} to find my level.`
+                        )
+                      }
+                      disabled={isPending || !session}
+                    >
+                      Check my level
+                    </button>
+                    <button
+                      className="ghost-button"
+                      onClick={() =>
+                        handleQuickStart(
+                          `Give me a quick overview of ${session?.topic ?? "this topic"} and why it matters.`
+                        )
+                      }
+                      disabled={isPending || !session}
+                    >
+                      Give overview
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               {messages.map((message, index) => (
                 <div key={`${message.role}-${index}`} className={`message ${message.role}`}>
                   <span className="message-tag">{message.role === "tutor" ? "Tutor" : "You"}</span>
@@ -815,42 +1046,56 @@ export function LearnerHome() {
           <article className="panel">
             <div className="section-header">
               <div>
-                <p className="section-label">What Comes Next</p>
-                <h3>Your learning path</h3>
+                <p className="section-label">Session Focus</p>
+                <h3>What matters right now</h3>
               </div>
             </div>
-            {nextRecommendation ? (
+            <div className="stack-list">
               <div className="info-tile">
-                <div className="objective-title-row">
-                  <strong>{nextRecommendation.title}</strong>
-                  <span className="mini-tag">{nextRecommendation.subject}</span>
-                </div>
-                <p className="supporting-text compact-text">{nextRecommendation.description}</p>
+                <strong>Focus area</strong>
                 <p className="supporting-text compact-text">
-                  {currentProgress?.ready_to_advance
-                    ? "You look ready to branch into this next concept."
-                    : "This is the next likely stop once the current concept feels solid."}
+                  {focusObjective
+                    ? focusObjective.objective.title
+                    : "The tutor will identify the main weak spot after a few turns."}
                 </p>
-                <button
-                  className="ghost-button inline-button"
-                  onClick={() => handleStartRecommendation(nextRecommendation.slug)}
-                  disabled={isPending}
-                >
-                  Start this lesson
-                </button>
               </div>
-            ) : (
-              <div className="empty-card">
-                <strong>We&apos;re still building your path.</strong>
+              <div className="info-tile">
+                <strong>Current step</strong>
                 <p className="supporting-text compact-text">
-                  We couldn&apos;t find a next recommendation yet. Refresh to try again, or keep studying and we&apos;ll
-                  rebuild it from your progress.
+                  {currentLessonStep ? currentLessonStep.title : "Starting your lesson"}
                 </p>
-                <button className="ghost-button inline-button" onClick={handleRefreshPath} disabled={isPending}>
-                  Refresh path
-                </button>
               </div>
-            )}
+              <div className="info-tile">
+                <strong>Lesson summary</strong>
+                <p className="supporting-text compact-text">
+                  {lessonPlan?.summary ?? "A plan will appear as soon as the lesson is generated."}
+                </p>
+              </div>
+            </div>
+          </article>
+
+          <article className="panel">
+            <div className="section-header">
+              <div>
+                <p className="section-label">Roadmap</p>
+                <h3>Your lesson plan</h3>
+              </div>
+            </div>
+            <div className="lesson-plan-list compact-plan-list">
+              {lessonPlan?.steps.map((step, index) => {
+                const stepState = getStepState(step, index);
+                return (
+                  <div key={step.id} className={`plan-step ${stepState}`}>
+                    <div className="objective-title-row">
+                      <strong>{index + 1}. {step.title}</strong>
+                      <span className={`mini-tag ${stepState === "active" ? "active-tag" : stepState === "completed" ? "completed-tag" : ""}`}>
+                        {stepState === "completed" ? "done" : stepState === "active" ? "active" : step.step_type}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </article>
 
           <article className="panel">
@@ -885,35 +1130,6 @@ export function LearnerHome() {
                 <div className="empty-card">
                   <strong>No reviews due right now.</strong>
                   <p className="supporting-text compact-text">New review work will appear here as the tutor tracks weaker areas.</p>
-                </div>
-              )}
-            </div>
-          </article>
-
-          <article className="panel">
-            <div className="section-header">
-              <div>
-                <p className="section-label">Lesson Sources</p>
-                <h3>What today&apos;s lesson is drawing from</h3>
-              </div>
-            </div>
-            <div className="stack-list">
-              {materials.length > 0 ? (
-                materials.map((material) => (
-                  <div key={material.id} className="info-tile">
-                    <div className="objective-title-row">
-                      <strong>{material.title}</strong>
-                      <span className="mini-tag">{material.material_type}</span>
-                    </div>
-                    <p className="supporting-text compact-text">{material.description}</p>
-                    <p className="supporting-text compact-text">{material.rationale}</p>
-                    <p className="supporting-text compact-text">Source cue: {material.query}</p>
-                  </div>
-                ))
-              ) : (
-                <div className="empty-card">
-                  <strong>No lesson sources yet.</strong>
-                  <p className="supporting-text compact-text">As we learn more about your weak spots, we&apos;ll recommend targeted material here.</p>
                 </div>
               )}
             </div>
@@ -968,6 +1184,8 @@ export function LearnerHome() {
           )}
         </div>
       </section>
+      </>
+      )}
     </main>
   );
 }
