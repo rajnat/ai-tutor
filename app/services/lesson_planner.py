@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
 from app.models.domain import Concept, ContentSnippet, GenerationTrace, Learner, LessonPlan, LessonPlanStep
-from app.services.llm import LlmError, LlmProvider
+from app.services.llm import LlmProvider
 from app.services.repositories import LessonPlanRepository
 
 
@@ -25,13 +24,11 @@ class LessonPlanPayload(BaseModel):
 
 
 class LessonPlannerService:
-    PROMPT_VERSION = "lesson_plan_v1"
-    FALLBACK_PROMPT_VERSION = "lesson_plan_fallback_v1"
+    PROMPT_VERSION = "lesson_plan_v2"
 
     def __init__(self, lesson_plan_repository: LessonPlanRepository, llm_provider: LlmProvider) -> None:
         self.lesson_plan_repository = lesson_plan_repository
         self.llm_provider = llm_provider
-        self.logger = logging.getLogger(__name__)
 
     def get_or_create_plan(
         self,
@@ -65,45 +62,53 @@ class LessonPlannerService:
             "content_ids": [snippet.id for snippet in content_snippets],
         }
         prompt = (
-            "Create a short lesson plan for an adaptive tutoring system.\n"
-            "Return JSON only.\n"
-            "The lesson plan should be practical for an interactive tutor session.\n"
-            "Use 3 to 6 steps total. Include a mix of explanation, checking understanding, and practice.\n\n"
-            f"Learner goal: {learner.goal}\n"
-            f"Learner preferences: style={learner.learning_style.teaching_style}, "
-            f"verbosity={learner.learning_style.verbosity}, prefers_examples={learner.learning_style.prefers_examples}\n"
-            f"Topic: {concept.slug}\n"
-            f"Topic description: {concept.description}\n"
-            f"Objectives:\n{objective_lines}\n"
-            f"Available content:\n{snippet_summaries}\n"
+            "<task>\n"
+            "Design a compact lesson sequence for a single tutoring session.\n"
+            "The plan should feel like a teachable mini-course, not a generic outline.\n"
+            "</task>\n\n"
+            f"<learner>\n"
+            f"goal: {learner.goal}\n"
+            f"teaching_style: {learner.learning_style.teaching_style}\n"
+            f"verbosity: {learner.learning_style.verbosity}\n"
+            f"prefers_examples: {learner.learning_style.prefers_examples}\n"
+            f"</learner>\n\n"
+            f"<concept>\n"
+            f"slug: {concept.slug}\n"
+            f"title: {concept.title}\n"
+            f"description: {concept.description}\n"
+            f"</concept>\n\n"
+            f"<objectives>\n{objective_lines}\n</objectives>\n\n"
+            f"<available_content>\n{snippet_summaries}\n</available_content>\n\n"
+            "<requirements>\n"
+            "- Use 3 to 6 steps.\n"
+            "- Begin with intuition or framing before heavy practice.\n"
+            "- Include at least one diagnostic or comprehension check.\n"
+            "- Include at least one practice-oriented step.\n"
+            "- End with a transition, synthesis, or next-step move.\n"
+            "- Step titles should read naturally in a course sidebar.\n"
+            "- Instructions should tell the tutor exactly what to do in that step.\n"
+            "- Rationales should explain why that step exists pedagogically.\n"
+            "</requirements>"
+        )
+        instructions = (
+            "You are an expert instructional designer for adaptive tutoring.\n"
+            "Return only JSON matching the schema.\n"
+            "Prefer coherent instructional sequencing over broad topic coverage.\n"
+            "Do not produce abstract syllabus language."
         )
 
-        try:
-            payload = self.llm_provider.generate_structured(
-                prompt=prompt,
-                schema=LessonPlanPayload,
-                schema_name="lesson_plan",
-            )
-            trace = GenerationTrace(
-                provider=self.llm_provider.provider_name,
-                model=self.llm_provider.model_name,
-                prompt_version=self.PROMPT_VERSION,
-                prompt_inputs=prompt_inputs,
-            )
-        except LlmError as error:
-            self.logger.warning(
-                "Falling back to deterministic lesson plan learner_id=%s topic=%s error_type=%s",
-                learner.id,
-                concept.slug,
-                type(error).__name__,
-            )
-            payload = self._build_fallback_payload(concept, content_snippets)
-            trace = GenerationTrace(
-                provider="system",
-                model="fallback",
-                prompt_version=self.FALLBACK_PROMPT_VERSION,
-                prompt_inputs={**prompt_inputs, "error_type": type(error).__name__},
-            )
+        payload = self.llm_provider.generate_structured(
+            prompt=prompt,
+            schema=LessonPlanPayload,
+            schema_name="lesson_plan",
+            instructions=instructions,
+        )
+        trace = GenerationTrace(
+            provider=self.llm_provider.provider_name,
+            model=self.llm_provider.model_name,
+            prompt_version=self.PROMPT_VERSION,
+            prompt_inputs=prompt_inputs,
+        )
         lesson_plan = LessonPlan(
             learner_id=learner.id,
             topic=concept.slug,
@@ -123,62 +128,6 @@ class LessonPlannerService:
         )
         self.lesson_plan_repository.supersede_active(learner.id, concept.slug)
         return self.lesson_plan_repository.save(lesson_plan)
-
-    def _build_fallback_payload(
-        self,
-        concept: Concept,
-        content_snippets: list[ContentSnippet],
-    ) -> LessonPlanPayload:
-        primary_objective = concept.objectives[0] if concept.objectives else None
-        secondary_objective = concept.objectives[1] if len(concept.objectives) > 1 else primary_objective
-        source_hint = content_snippets[0].title if content_snippets else concept.title
-
-        steps = [
-            LessonPlanStepPayload(
-                title=f"Build intuition for {concept.title}",
-                objective_id=primary_objective.id if primary_objective is not None else None,
-                objective_slug=primary_objective.slug if primary_objective is not None else None,
-                instruction=(
-                    f"Start with a simple explanation of {concept.title.lower()} and connect it to a concrete example from {source_hint}."
-                ),
-                rationale="The learner needs a clear starting mental model before moving into checks or practice.",
-                step_type="explain",
-            ),
-            LessonPlanStepPayload(
-                title="Check understanding",
-                objective_id=primary_objective.id if primary_objective is not None else None,
-                objective_slug=primary_objective.slug if primary_objective is not None else None,
-                instruction=(
-                    "Ask one focused diagnostic question that reveals whether the core idea makes sense in the learner's own words."
-                ),
-                rationale="A quick diagnostic confirms whether the explanation actually landed.",
-                step_type="diagnostic",
-            ),
-            LessonPlanStepPayload(
-                title="Practice the weak spot",
-                objective_id=secondary_objective.id if secondary_objective is not None else None,
-                objective_slug=secondary_objective.slug if secondary_objective is not None else None,
-                instruction=(
-                    "Give one short practice or comparison task that targets the weakest subskill on this concept."
-                ),
-                rationale="Practice turns passive understanding into something the learner can actively use.",
-                step_type="practice",
-            ),
-            LessonPlanStepPayload(
-                title="Connect forward",
-                objective_id=secondary_objective.id if secondary_objective is not None else None,
-                objective_slug=secondary_objective.slug if secondary_objective is not None else None,
-                instruction=(
-                    "Summarize the main idea, correct any remaining confusion, and connect it to what comes next."
-                ),
-                rationale="Closing the loop helps retention and prepares the learner for advancement.",
-                step_type="advance",
-            ),
-        ]
-        return LessonPlanPayload(
-            summary=f"A guided lesson in {concept.title} that builds intuition, checks understanding, and moves into practice.",
-            steps=steps,
-        )
 
     def advance_progress(
         self,

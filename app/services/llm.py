@@ -39,6 +39,7 @@ class LlmProvider:
         prompt: str,
         schema: type[SchemaT],
         schema_name: str,
+        instructions: str | None = None,
     ) -> SchemaT:
         raise NotImplementedError
 
@@ -110,6 +111,7 @@ class OpenAIResponsesProvider(LlmProvider):
         prompt: str,
         schema: type[SchemaT],
         schema_name: str,
+        instructions: str | None = None,
     ) -> SchemaT:
         payload = self._post_responses(
             {
@@ -120,7 +122,7 @@ class OpenAIResponsesProvider(LlmProvider):
                         "content": [
                             {
                                 "type": "input_text",
-                                "text": "Return only a structured JSON evaluation."
+                                "text": instructions or "Return only a structured JSON response."
                             }
                         ],
                     },
@@ -203,7 +205,72 @@ class StubResponsesProvider(LlmProvider):
         prompt: str,
         schema: type[SchemaT],
         schema_name: str,
+        instructions: str | None = None,
     ) -> SchemaT:
+        del instructions
+        if schema_name == "lesson_content":
+            step_title = "Core lesson"
+            for line in prompt.splitlines():
+                if line.startswith("Active step:"):
+                    step_title = line.split(":", 1)[1].strip() or step_title
+                    break
+            objective_id = None
+            objective_slug = None
+            for line in prompt.splitlines():
+                if line.strip().startswith("- id="):
+                    parts = [part.strip() for part in line.replace("- ", "", 1).split("|")]
+                    values: dict[str, str] = {}
+                    for part in parts:
+                        if "=" in part:
+                            key, value = part.split("=", 1)
+                            values[key.strip()] = value.strip()
+                    objective_id = values.get("id")
+                    objective_slug = values.get("slug")
+                    break
+            return schema.model_validate(
+                {
+                    "title": step_title,
+                    "subtitle": "A structured lesson section with one embedded checkpoint.",
+                    "blocks": [
+                        {"type": "heading", "text": step_title},
+                        {
+                            "type": "paragraph",
+                            "text": "Start with the core idea in plain language and connect it to why it matters."
+                        },
+                        {
+                            "type": "example",
+                            "text": "Use one small, concrete example before moving to abstraction."
+                        },
+                        {
+                            "type": "checkpoint_mcq",
+                            "checkpoint": {
+                                "prompt": "Which choice best matches the main idea so far?",
+                                "objective_id": objective_id,
+                                "objective_slug": objective_slug,
+                                "options": [
+                                    "Memorize terms without applying them.",
+                                    "Understand the idea and use it in context.",
+                                    "Skip directly to edge cases.",
+                                ],
+                                "correct_option_index": 1,
+                                "explanation": "The goal is usable understanding, not memorization or premature complexity.",
+                            },
+                        },
+                        {
+                            "type": "go_deeper",
+                            "prompts": [
+                                "Give me a simpler explanation.",
+                                "Show me an example.",
+                                "Quiz me one more time."
+                            ],
+                        },
+                        {
+                            "type": "summary",
+                            "text": "Once this checkpoint feels clear, continue to the next section."
+                        },
+                    ],
+                }
+            )
         if schema_name == "study_intent":
             learner_request = ""
             for line in prompt.splitlines():

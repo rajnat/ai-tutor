@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import {
+  activateCourseSection,
   clearAuthSession,
   completeReview,
   createStudySession,
@@ -122,6 +123,25 @@ function authErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function describeTutorMoment(action: string) {
+  const labels: Record<string, string> = {
+    explain: "Explanation",
+    ask_diagnostic: "Quick check",
+    ask_practice: "Practice",
+    reinforce: "Reinforcement",
+    advance: "Moving forward"
+  };
+
+  return labels[action] ?? "Tutor guidance";
+}
+
+function buildTutorMeta(stepTitle?: string | null) {
+  if (!stepTitle) {
+    return undefined;
+  }
+  return `Section: ${stepTitle}`;
+}
+
 export function LearnerHome() {
   const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
   const [authMode, setAuthMode] = useState<AuthMode>("signup");
@@ -157,6 +177,12 @@ export function LearnerHome() {
     }
     return lessonPlan.steps[lessonPlan.current_step_index] ?? lessonPlan.steps[0] ?? null;
   }, [lessonPlan]);
+  const nextCourseSection = useMemo(() => {
+    if (!workspace?.course.sections.length || !workspace.current_section) {
+      return null;
+    }
+    return workspace.course.sections[workspace.current_section.position + 1] ?? null;
+  }, [workspace]);
 
   async function refreshWorkspace(learnerId: string) {
     const nextWorkspace = await getLessonWorkspace(learnerId).catch(() => null);
@@ -217,7 +243,7 @@ export function LearnerHome() {
           {
             role: "tutor" as const,
             text: turn.tutor_response,
-            meta: `Tutor move: ${turn.tutor_action}`
+            meta: describeTutorMoment(turn.tutor_action)
           }
         ])
       );
@@ -389,9 +415,9 @@ export function LearnerHome() {
             {
               role: "tutor",
               text: response.tutor_response,
-              meta: `Tutor move: ${response.tutor_action} | Current step: ${
-                response.active_lesson_step?.title ?? "Adapting the lesson"
-              } | Focus: ${response.evaluation.objective_id ?? "general understanding"}`
+              meta:
+                buildTutorMeta(response.active_lesson_step?.title) ??
+                describeTutorMoment(response.tutor_action)
             }
           ]);
           setStatus(
@@ -474,6 +500,48 @@ export function LearnerHome() {
           setStatus(result.is_correct ? "Checkpoint complete." : "Let's reinforce that idea.");
         } catch (checkpointError) {
           setError(authErrorMessage(checkpointError, "Unable to submit that checkpoint."));
+        }
+      })();
+    });
+  }
+
+  function handleActivateSection(sectionId: string) {
+    if (!learner || !workspace?.course) {
+      return;
+    }
+
+    startTransition(() => {
+      void (async () => {
+        try {
+          setError(null);
+          const response = await activateCourseSection(learner.id, workspace.course.id, sectionId);
+          setWorkspace((current) =>
+            current
+              ? {
+                  ...current,
+                  course: response.course,
+                  lesson_plan: response.lesson_plan,
+                  current_section: response.current_section,
+                  section_content: response.section_content,
+                }
+              : {
+                  course: response.course,
+                  lesson_plan: response.lesson_plan,
+                  current_section: response.current_section,
+                  section_content: response.section_content,
+                  session: session!,
+                  active_step:
+                    response.current_section && response.current_section.position < response.lesson_plan.steps.length
+                      ? response.lesson_plan.steps[response.current_section.position]
+                      : null,
+                }
+          );
+          setLessonPlan(response.lesson_plan);
+          setStatus("Section updated.");
+          setCheckpointSelections({});
+          setCheckpointResults({});
+        } catch (sectionError) {
+          setError(authErrorMessage(sectionError, "Unable to open that section."));
         }
       })();
     });
@@ -579,7 +647,14 @@ export function LearnerHome() {
     return labels[step.step_type];
   }
 
-  function getStepState(step: LessonPlanStep, index: number) {
+  function getStepState(step: { id: string }, index: number) {
+    if (workspace?.course.sections[index]) {
+      return workspace.course.sections[index].status === "completed"
+        ? "completed"
+        : workspace.course.sections[index].status === "active"
+          ? "active"
+          : "upcoming";
+    }
     if (!lessonPlan) {
       return "upcoming";
     }
@@ -874,317 +949,324 @@ export function LearnerHome() {
           </aside>
         </section>
       ) : (
-      <>
-      <section className="lesson-layout">
-        <div className="main-column">
-          <article className="panel lesson-panel lesson-panel-primary">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Lesson</p>
-                <h3>{session?.topic ?? "Your lesson"}</h3>
+        <>
+          <section className="course-workspace">
+            <aside className="panel course-nav">
+              <div className="course-nav-header">
+                <p className="section-label">Course</p>
+                <h3>{workspace?.course.title ?? session.topic}</h3>
                 <p className="supporting-text compact-text">
-                  {currentLessonStep
-                    ? `Current step: ${currentLessonStep.title}. ${currentLessonStep.instruction}`
-                    : "Start with a guided action below and the tutor will take the lead."}
+                  {lessonPlan?.summary ?? "A generated lesson path built from what you asked to learn today."}
                 </p>
               </div>
-              <span className={`badge ${currentProgress?.ready_to_advance ? "ready" : "active"}`}>
-                {currentProgress?.ready_to_advance ? "Ready to move on" : "Keep practicing"}
-              </span>
-            </div>
 
-            <div className="lesson-actions">
-              <button
-                className="primary-button"
-                onClick={() =>
-                  handleQuickStart(
-                    currentLessonStep
-                      ? `I'm ready. Start with "${currentLessonStep.title}" and guide me step by step.`
-                      : `I'm ready to continue with ${session?.topic ?? "this lesson"}.`
-                  )
-                }
-                disabled={isPending || !session}
-              >
-                Resume lesson
-              </button>
-              <button
-                className="ghost-button"
-                onClick={() =>
-                  handleQuickStart(
-                    focusObjective
-                      ? `Explain ${focusObjective.objective.title.toLowerCase()} in a simpler way.`
-                      : `Explain the core idea in ${session?.topic ?? "this topic"} more simply.`
-                  )
-                }
-                disabled={isPending || !session}
-              >
-                Explain differently
-              </button>
-              <button
-                className="ghost-button"
-                onClick={() =>
-                  handleQuickStart(
-                    focusObjective
-                      ? `Give me one short practice question on ${focusObjective.objective.title.toLowerCase()}.`
-                      : `Give me one short practice question on ${session?.topic ?? "this topic"}.`
-                  )
-                }
-                disabled={isPending || !session}
-              >
-                Practice now
-              </button>
-              <button
-                className="ghost-button"
-                onClick={() => {
-                  if (learner) {
-                    safeStorageRemove(sessionStorageKey(learner.id));
-                  }
-                  setSession(null);
-                  setLessonPlan(null);
-                  setMessages([]);
-                  setProgress([]);
-                  setReviews([]);
-                  setDraft("");
-                  setStatus("What do you want to learn today?");
-                }}
-                disabled={isPending}
-              >
-                Learn something else
-              </button>
-            </div>
+              <div className="course-outline">
+                {(workspace?.course.sections.length ? workspace.course.sections : lessonPlan?.steps ?? []).map((step, index) => {
+                  const stepState = getStepState(step, index);
+                  return (
+                    <button
+                      key={step.id}
+                      type="button"
+                      className={`course-outline-item ${stepState}`}
+                      onClick={() =>
+                        "course_id" in step && learner && workspace?.course
+                          ? handleActivateSection(step.id)
+                          : undefined
+                      }
+                      disabled={isPending || !("course_id" in step) || !workspace?.course}
+                    >
+                      <span className="course-outline-index">{index + 1}</span>
+                      <span className="course-outline-copy">
+                        <strong>{step.title}</strong>
+                        <span>
+                          {stepState === "completed"
+                            ? "Completed"
+                            : stepState === "active"
+                              ? "Current section"
+                              : "Available next"}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
 
-            <div className="message-stream">
-              {workspace?.section_content ? (
-                <div className="lesson-content-card">
-                  <div className="lesson-content-header">
-                    <p className="section-label">Section</p>
-                    <h4>{workspace.section_content.title}</h4>
-                    {workspace.section_content.subtitle ? (
-                      <p className="supporting-text compact-text">{workspace.section_content.subtitle}</p>
-                    ) : null}
-                  </div>
-                  <div className="lesson-content-flow">
-                    {workspace.section_content.blocks.map((block) => (
-                      <div key={block.id}>{renderLessonBlock(block)}</div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-              {session?.turns.length === 0 ? (
-                <div className="plan-highlight">
-                  <strong>{currentLessonStep?.title ?? `Start learning ${session?.topic ?? ""}`}</strong>
-                  <p className="supporting-text compact-text">
-                    {currentLessonStep?.instruction ??
-                      "Choose one of the guided starts below and the tutor will take the first step with you."}
-                  </p>
-                  <div className="landing-actions">
-                    <button
-                      className="primary-button"
-                      onClick={() =>
-                        handleQuickStart(
-                          currentLessonStep
-                            ? `Teach me ${currentLessonStep.title.toLowerCase()} from the beginning with one simple example.`
-                            : `Teach me the core idea in ${session?.topic ?? "this topic"} from the beginning.`
-                        )
-                      }
-                      disabled={isPending || !session}
-                    >
-                      Start guided lesson
-                    </button>
-                    <button
-                      className="ghost-button"
-                      onClick={() =>
-                        handleQuickStart(
-                          `Ask me one short diagnostic question about ${session?.topic ?? "this topic"} to find my level.`
-                        )
-                      }
-                      disabled={isPending || !session}
-                    >
-                      Check my level
-                    </button>
-                    <button
-                      className="ghost-button"
-                      onClick={() =>
-                        handleQuickStart(
-                          `Give me a quick overview of ${session?.topic ?? "this topic"} and why it matters.`
-                        )
-                      }
-                      disabled={isPending || !session}
-                    >
-                      Give overview
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-              {messages.map((message, index) => (
-                <div key={`${message.role}-${index}`} className={`message ${message.role}`}>
-                  <span className="message-tag">{message.role === "tutor" ? "Tutor" : "You"}</span>
-                  <p>{message.text}</p>
-                  {message.meta ? <p className="supporting-text compact-text">{message.meta}</p> : null}
-                </div>
-              ))}
-            </div>
-
-            <div className="composer-card">
-              <textarea
-                rows={4}
-                placeholder="Answer the tutor, ask for another explanation, or say what feels confusing."
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-              />
-              <div className="composer-actions">
-                {error ? <p className="error-text">{error}</p> : <p className="supporting-text compact-text">{status}</p>}
-                <button className="primary-button" onClick={handleSend} disabled={isPending || !draft.trim()}>
-                  Send
+              <div className="course-nav-footer">
+                <button
+                  className="ghost-button"
+                  onClick={() => {
+                    if (learner) {
+                      safeStorageRemove(sessionStorageKey(learner.id));
+                    }
+                    setSession(null);
+                    setLessonPlan(null);
+                    setWorkspace(null);
+                    setMessages([]);
+                    setProgress([]);
+                    setReviews([]);
+                    setDraft("");
+                    setStatus("What do you want to learn today?");
+                  }}
+                  disabled={isPending}
+                >
+                  New lesson
                 </button>
               </div>
-            </div>
-          </article>
-        </div>
+            </aside>
 
-        <aside className="side-column">
-          <article className="panel">
-            <div className="section-header">
-              <div>
-                <p className="section-label">Session Focus</p>
-                <h3>What matters right now</h3>
+            <section className="panel lesson-reader">
+              <div className="lesson-reader-header">
+                <div>
+                  <p className="section-label">
+                    {workspace?.course.title ?? "Course"} / Section {workspace?.current_section ? workspace.current_section.position + 1 : 1}
+                  </p>
+                  <h2>{workspace?.current_section?.title ?? session?.topic ?? "Your lesson"}</h2>
+                  <p className="supporting-text">
+                    {workspace?.section_content.subtitle ??
+                      currentLessonStep?.instruction ??
+                      "The tutor will adapt this section as you ask follow-up questions."}
+                  </p>
+                </div>
+                <div className="reader-status">
+                  <span className={`badge ${currentProgress?.ready_to_advance ? "ready" : "active"}`}>
+                    {currentProgress?.ready_to_advance ? "Ready" : "In progress"}
+                  </span>
+                  <span className="mini-tag">{describeStepType(currentLessonStep)}</span>
+                  <span className="status-chip">{Math.round(currentMastery)}% mastery</span>
+                </div>
               </div>
-            </div>
-            <div className="stack-list">
-              <div className="info-tile">
-                <strong>Focus area</strong>
-                <p className="supporting-text compact-text">
-                  {focusObjective
-                    ? focusObjective.objective.title
-                    : "The tutor will identify the main weak spot after a few turns."}
-                </p>
-              </div>
-              <div className="info-tile">
-                <strong>Current step</strong>
-                <p className="supporting-text compact-text">
-                  {currentLessonStep ? currentLessonStep.title : "Starting your lesson"}
-                </p>
-              </div>
-              <div className="info-tile">
-                <strong>Lesson summary</strong>
-                <p className="supporting-text compact-text">
-                  {lessonPlan?.summary ?? "A plan will appear as soon as the lesson is generated."}
-                </p>
-              </div>
-            </div>
-          </article>
 
-          <article className="panel">
-            <div className="section-header">
-              <div>
-                <p className="section-label">Roadmap</p>
-                <h3>Your lesson plan</h3>
+              <div className="reader-quick-actions">
+                <button
+                  className="primary-button"
+                  onClick={() =>
+                    handleQuickStart(
+                      currentLessonStep
+                        ? `I'm ready. Start with "${currentLessonStep.title}" and guide me step by step.`
+                        : `I'm ready to continue with ${session?.topic ?? "this lesson"}.`
+                    )
+                  }
+                  disabled={isPending || !session}
+                >
+                  Continue
+                </button>
+                <button
+                  className="ghost-button"
+                  onClick={() =>
+                    handleQuickStart(
+                      focusObjective
+                        ? `Explain ${focusObjective.objective.title.toLowerCase()} in a simpler way.`
+                        : `Explain the core idea in ${session?.topic ?? "this topic"} more simply.`
+                    )
+                  }
+                  disabled={isPending || !session}
+                >
+                  Explain differently
+                </button>
+                <button
+                  className="ghost-button"
+                  onClick={() =>
+                    handleQuickStart(
+                      focusObjective
+                        ? `Give me one short practice question on ${focusObjective.objective.title.toLowerCase()}.`
+                        : `Give me one short practice question on ${session?.topic ?? "this topic"}.`
+                    )
+                  }
+                  disabled={isPending || !session}
+                >
+                  Practice
+                </button>
               </div>
-            </div>
-            <div className="lesson-plan-list compact-plan-list">
-              {lessonPlan?.steps.map((step, index) => {
-                const stepState = getStepState(step, index);
-                return (
-                  <div key={step.id} className={`plan-step ${stepState}`}>
-                    <div className="objective-title-row">
-                      <strong>{index + 1}. {step.title}</strong>
-                      <span className={`mini-tag ${stepState === "active" ? "active-tag" : stepState === "completed" ? "completed-tag" : ""}`}>
-                        {stepState === "completed" ? "done" : stepState === "active" ? "active" : step.step_type}
-                      </span>
+
+              <div className="lesson-reader-body">
+                {workspace?.section_content ? (
+                  <article className="lesson-content-card lesson-article">
+                    <div className="lesson-article-intro">
+                      <span className="section-kicker">Section focus</span>
+                      <p className="lesson-lede">
+                        {workspace.current_section?.summary ??
+                          currentLessonStep?.instruction ??
+                          "This section introduces the core idea before moving into checks and practice."}
+                      </p>
+                    </div>
+                    <div className="lesson-content-flow">
+                      {workspace.section_content.blocks.map((block) => (
+                        <div key={block.id}>{renderLessonBlock(block)}</div>
+                      ))}
+                    </div>
+                    <div className="section-transition-card">
+                      <div>
+                        <p className="section-label">After This</p>
+                        <h4>{nextCourseSection ? nextCourseSection.title : "Stay with this section a little longer"}</h4>
+                        <p className="supporting-text compact-text">
+                          {nextCourseSection
+                            ? nextCourseSection.summary
+                            : "Use the tutor to go deeper, practice, or revisit the current idea before moving on."}
+                        </p>
+                      </div>
+                      {nextCourseSection ? (
+                        <button
+                          className="ghost-button"
+                          onClick={() => handleActivateSection(nextCourseSection.id)}
+                          disabled={isPending}
+                        >
+                          Open next section
+                        </button>
+                      ) : null}
+                    </div>
+                  </article>
+                ) : null}
+
+                {session?.turns.length === 0 ? (
+                  <div className="plan-highlight lesson-kickoff">
+                    <strong>{currentLessonStep?.title ?? `Start learning ${session?.topic ?? ""}`}</strong>
+                    <p className="supporting-text compact-text">
+                      {currentLessonStep?.instruction ??
+                        "Choose one of the guided starts below and the tutor will take the first step with you."}
+                    </p>
+                    <div className="landing-actions">
+                      <button
+                        className="primary-button"
+                        onClick={() =>
+                          handleQuickStart(
+                            currentLessonStep
+                              ? `Teach me ${currentLessonStep.title.toLowerCase()} from the beginning with one simple example.`
+                              : `Teach me the core idea in ${session?.topic ?? "this topic"} from the beginning.`
+                          )
+                        }
+                        disabled={isPending || !session}
+                      >
+                        Start guided lesson
+                      </button>
+                      <button
+                        className="ghost-button"
+                        onClick={() =>
+                          handleQuickStart(
+                            `Ask me one short diagnostic question about ${session?.topic ?? "this topic"} to find my level.`
+                          )
+                        }
+                        disabled={isPending || !session}
+                      >
+                        Check my level
+                      </button>
+                      <button
+                        className="ghost-button"
+                        onClick={() =>
+                          handleQuickStart(
+                            `Give me a quick overview of ${session?.topic ?? "this topic"} and why it matters.`
+                          )
+                        }
+                        disabled={isPending || !session}
+                      >
+                        Give overview
+                      </button>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          </article>
+                ) : null}
 
-          <article className="panel">
-            <div className="section-header">
-              <div>
-                <p className="section-label">Today</p>
-                <h3>Review queue</h3>
-              </div>
-            </div>
-            <div className="stack-list">
-              {reviews.length > 0 ? (
-                reviews.map((review) => (
-                  <div key={review.id} className="info-tile">
-                    <strong>{review.topic}</strong>
-                    <p className="supporting-text compact-text">{review.prompt}</p>
-                    <p className="supporting-text compact-text">Due {formatDueLabel(review.due_at)}</p>
-                    <p className="supporting-text compact-text">{review.review_count} prior review{review.review_count === 1 ? "" : "s"}</p>
-                    <textarea
-                      rows={3}
-                      placeholder="Write your answer from memory."
-                      value={reviewAnswers[review.id] ?? ""}
-                      onChange={(event) =>
-                        setReviewAnswers((current) => ({ ...current, [review.id]: event.target.value }))
-                      }
-                    />
-                    <button className="ghost-button inline-button" onClick={() => handleReview(review.id)} disabled={isPending || !(reviewAnswers[review.id] ?? "").trim()}>
-                      Submit review
-                    </button>
-                  </div>
-                ))
-              ) : (
-                <div className="empty-card">
-                  <strong>No reviews due right now.</strong>
-                  <p className="supporting-text compact-text">New review work will appear here as the tutor tracks weaker areas.</p>
-                </div>
-              )}
-            </div>
-          </article>
-        </aside>
-      </section>
-
-      <section className="progress-section">
-        <div className="section-header">
-          <div>
-            <p className="section-label">Progress</p>
-            <h3>How your current track is shaping up</h3>
-          </div>
-          <p className="supporting-text compact-text">{account?.email}</p>
-        </div>
-
-        <div className="progress-grid">
-          {progress.length > 0 ? (
-            progress.map((item) => (
-              <article key={item.concept.id} className="panel progress-panel">
-                <header>
-                  <div>
-                    <strong>{item.concept.title}</strong>
-                    <p className="supporting-text compact-text">{item.concept.description}</p>
-                  </div>
-                  <span className={`badge ${item.ready_to_advance ? "ready" : "active"}`}>
-                    {item.ready_to_advance ? "Ready" : "In progress"}
-                  </span>
-                </header>
-                <div className="objective-list">
-                  {item.objectives.map((objective) => (
-                    <div key={objective.objective.id} className="objective-item">
-                      <div className="objective-title-row">
-                        <strong>{objective.objective.title}</strong>
-                        <span className="mini-tag">{Math.round(objective.mastery * 100)}%</span>
-                      </div>
-                      <div className="meter">
-                        <span style={{ width: `${Math.round(objective.mastery * 100)}%` }} />
-                      </div>
+                <div className="reader-thread">
+                  {messages.length > 0 ? (
+                    <div className="thread-divider">
+                      <span>Conversation</span>
+                    </div>
+                  ) : null}
+                  {messages.map((message, index) => (
+                    <div key={`${message.role}-${index}`} className={`message ${message.role}`}>
+                      <span className="message-tag">{message.role === "tutor" ? "Tutor" : "You"}</span>
+                      <p>{message.text}</p>
+                      {message.meta ? <p className="supporting-text compact-text">{message.meta}</p> : null}
                     </div>
                   ))}
                 </div>
+              </div>
+
+              <div className="composer-card lesson-composer">
+                <textarea
+                  rows={3}
+                  placeholder="Go deeper on a point, answer the tutor, or ask what to do next."
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                />
+                <div className="composer-actions">
+                  {error ? <p className="error-text">{error}</p> : <p className="supporting-text compact-text">{status}</p>}
+                  <button className="primary-button" onClick={handleSend} disabled={isPending || !draft.trim()}>
+                    Send
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <aside className="utility-rail">
+              <article className="panel utility-card">
+                <p className="section-label">Focus</p>
+                <h3>{focusObjective ? focusObjective.objective.title : "Keep building intuition"}</h3>
+                <p className="supporting-text compact-text">
+                  {focusObjective
+                    ? `${Math.round(focusObjective.mastery * 100)}% mastery on the weakest objective in this course.`
+                    : "The tutor is still calibrating what needs the most attention."}
+                </p>
               </article>
-            ))
-          ) : (
-            <article className="panel empty-card">
-              <strong>Your detailed progress will appear here as you study.</strong>
-              <p className="supporting-text compact-text">
-                Start a lesson and the tutor will begin tracking how each objective is developing.
-              </p>
-            </article>
-          )}
-        </div>
-      </section>
-      </>
+
+              <article className="panel utility-card">
+                <p className="section-label">Review</p>
+                <h3>{reviews.length > 0 ? `${reviews.length} item${reviews.length === 1 ? "" : "s"} due` : "Nothing due"}</h3>
+                {reviews.length > 0 ? (
+                  <div className="review-stack">
+                    {reviews.slice(0, 2).map((review) => (
+                      <div key={review.id} className="review-compact">
+                        <strong>{review.topic}</strong>
+                        <p className="supporting-text compact-text">{review.prompt}</p>
+                        <textarea
+                          rows={3}
+                          placeholder="Answer from memory."
+                          value={reviewAnswers[review.id] ?? ""}
+                          onChange={(event) =>
+                            setReviewAnswers((current) => ({ ...current, [review.id]: event.target.value }))
+                          }
+                        />
+                        <button
+                          className="ghost-button inline-button"
+                          onClick={() => handleReview(review.id)}
+                          disabled={isPending || !(reviewAnswers[review.id] ?? "").trim()}
+                        >
+                          Submit review
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="supporting-text compact-text">
+                    New review prompts will show up here as the tutor identifies weaker areas.
+                  </p>
+                )}
+              </article>
+
+              <article className="panel utility-card">
+                <p className="section-label">Progress</p>
+                <h3>{workspace?.course.title ?? session.topic}</h3>
+                {currentProgress?.objectives?.length ? (
+                  <div className="objective-list compact-objective-list">
+                    {currentProgress.objectives.slice(0, 3).map((objective) => (
+                      <div key={objective.objective.id} className="objective-item">
+                        <div className="objective-title-row">
+                          <strong>{objective.objective.title}</strong>
+                          <span className="mini-tag">{Math.round(objective.mastery * 100)}%</span>
+                        </div>
+                        <div className="meter">
+                          <span style={{ width: `${Math.round(objective.mastery * 100)}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="supporting-text compact-text">
+                    Objective-level progress will fill in as you work through this course.
+                  </p>
+                )}
+              </article>
+            </aside>
+          </section>
+        </>
       )}
     </main>
   );

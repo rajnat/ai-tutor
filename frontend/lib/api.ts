@@ -1,4 +1,5 @@
 import type {
+  ActivateSectionResponse,
   AuthPayload,
   CheckpointAttemptResponse,
   Concept,
@@ -223,6 +224,17 @@ export function submitCheckpointAttempt(
   return request<CheckpointAttemptResponse>(`/learners/${learnerId}/checkpoints/${checkpointId}/attempt`, {
     method: "POST",
     body: JSON.stringify({ selected_option_id: selectedOptionId })
+  });
+}
+
+export function activateCourseSection(
+  learnerId: string,
+  courseId: string,
+  sectionId: string
+) {
+  return request<ActivateSectionResponse>(`/learners/${learnerId}/courses/${courseId}/sections/activate`, {
+    method: "POST",
+    body: JSON.stringify({ section_id: sectionId })
   });
 }
 

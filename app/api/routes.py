@@ -4,6 +4,8 @@ from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response
 from sqlalchemy.orm import Session as DbSession
 
 from app.models.api import (
+    ActivateSectionRequest,
+    ActivateSectionResponse,
     AccountResponse,
     AuthResponse,
     CompleteReviewRequest,
@@ -14,7 +16,10 @@ from app.models.api import (
     CreateSessionRequest,
     LearnerResponse,
     LessonPlanResponse,
+    LessonWorkspaceResponse,
     LoginRequest,
+    CheckpointAttemptResponse,
+    SubmitCheckpointAttemptRequest,
     SupplementalMaterialResponse,
     SignupRequest,
     TopicProgressResponse,
@@ -35,6 +40,7 @@ from app.services.dependencies import (
     require_csrf,
     get_auth_service,
     get_current_account,
+    get_course_workspace_service,
     get_curriculum_repository,
     get_learner_repository,
     get_lesson_plan_repository,
@@ -45,9 +51,10 @@ from app.services.dependencies import (
     get_session_repository,
     get_study_intent_service,
 )
+from app.services.lesson_planner import LessonPlannerService
+from app.services.learner_model import LearnerModelService
 from app.services.objectives import ObjectiveGenerator
 from app.services.review import ReviewScheduler
-from app.services.lesson_planner import LessonPlannerService
 
 api_router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger(__name__)
@@ -278,6 +285,11 @@ def create_study_session(
         prompt=payload.prompt,
         mode=payload.mode.value,
     )
+    get_course_workspace_service(db).ensure_course(
+        learner=updated_learner,
+        concept=concept,
+        lesson_plan=lesson_plan,
+    )
     logger.info(
         "Created study session learner_id=%s topic=%s prompt=%s",
         learner_id,
@@ -408,6 +420,135 @@ def get_lesson_plan(
         len(lesson_plan.steps),
     )
     return LessonPlanResponse.model_validate(lesson_plan)
+
+
+@api_router.get("/learners/{learner_id}/workspace", response_model=LessonWorkspaceResponse)
+def get_lesson_workspace(
+    learner_id: str,
+    current_account: Account = Depends(get_current_account),
+    db: DbSession = Depends(get_db_session),
+) -> LessonWorkspaceResponse:
+    if learner_id != current_account.learner_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    learner = get_learner_repository(db).get(learner_id)
+    if learner is None:
+        raise HTTPException(status_code=404, detail="Learner not found")
+    sessions = get_session_repository(db).list_for_learner(learner_id, limit=1)
+    if not sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = sessions[0]
+    normalized_topic = _normalize_topic_for_learner(db, learner_id, session.topic)
+    if normalized_topic != session.topic:
+        session.topic = normalized_topic
+        session = get_session_repository(db).save(session)
+    concept = get_curriculum_repository(db).get_by_slug(session.topic)
+    if concept is None:
+        raise HTTPException(status_code=404, detail="Concept not found")
+    lesson_plan = get_lesson_plan_repository(db).get_active(learner_id, session.topic)
+    if lesson_plan is None:
+        lesson_plan = LessonPlannerService(
+            lesson_plan_repository=get_lesson_plan_repository(db),
+            llm_provider=get_orchestrator(db).lesson_planner.llm_provider,
+        ).create_plan(learner=learner, concept=concept, content_snippets=[])
+    course_workspace = get_course_workspace_service(db)
+    course = course_workspace.ensure_course(
+        learner=learner,
+        concept=concept,
+        lesson_plan=lesson_plan,
+    )
+    current_section = course_workspace.current_section(course)
+    if current_section is None:
+        raise HTTPException(status_code=404, detail="Course section not found")
+    active_step = (
+        lesson_plan.steps[current_section.position]
+        if lesson_plan.steps and current_section.position < len(lesson_plan.steps)
+        else None
+    )
+    section_content = course_workspace.get_or_create_section_content(
+        course=course,
+        section=current_section,
+        learner=learner,
+        concept=concept,
+        lesson_plan=lesson_plan,
+        active_step=active_step,
+        recent_messages=[turn.learner_message for turn in session.turns[-3:]],
+    )
+    return LessonWorkspaceResponse(
+        course=course,
+        current_section=current_section,
+        session=SessionResponse.model_validate(session),
+        lesson_plan=LessonPlanResponse.model_validate(lesson_plan),
+        active_step=active_step,
+        section_content=section_content.content,
+    )
+
+
+@api_router.post(
+    "/learners/{learner_id}/courses/{course_id}/sections/activate",
+    response_model=ActivateSectionResponse,
+)
+def activate_course_section(
+    learner_id: str,
+    course_id: str,
+    payload: ActivateSectionRequest,
+    current_account: Account = Depends(require_csrf),
+    db: DbSession = Depends(get_db_session),
+) -> ActivateSectionResponse:
+    if learner_id != current_account.learner_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    learner = get_learner_repository(db).get(learner_id)
+    if learner is None:
+        raise HTTPException(status_code=404, detail="Learner not found")
+    sessions = get_session_repository(db).list_for_learner(learner_id, limit=1)
+    if not sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = sessions[0]
+    concept = get_curriculum_repository(db).get_by_slug(_normalize_topic_for_learner(db, learner_id, session.topic))
+    if concept is None:
+        raise HTTPException(status_code=404, detail="Concept not found")
+    lesson_plan = get_lesson_plan_repository(db).get_active(learner_id, concept.slug)
+    if lesson_plan is None:
+        raise HTTPException(status_code=404, detail="Lesson plan not found")
+    course_workspace = get_course_workspace_service(db)
+    course = course_workspace.ensure_course(
+        learner=learner,
+        concept=concept,
+        lesson_plan=lesson_plan,
+    )
+    if course.id != course_id:
+        raise HTTPException(status_code=404, detail="Course not found")
+    try:
+        course, lesson_plan = course_workspace.activate_section(
+            course=course,
+            lesson_plan=lesson_plan,
+            section_id=payload.section_id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+    current_section = course_workspace.current_section(course)
+    if current_section is None:
+        raise HTTPException(status_code=404, detail="Course section not found")
+    active_step = (
+        lesson_plan.steps[current_section.position]
+        if lesson_plan.steps and current_section.position < len(lesson_plan.steps)
+        else None
+    )
+    section_content = course_workspace.get_or_create_section_content(
+        course=course,
+        section=current_section,
+        learner=learner,
+        concept=concept,
+        lesson_plan=lesson_plan,
+        active_step=active_step,
+        recent_messages=[turn.learner_message for turn in session.turns[-3:]],
+    )
+    return ActivateSectionResponse(
+        course=course,
+        lesson_plan=LessonPlanResponse.model_validate(lesson_plan),
+        current_section=current_section,
+        section_content=section_content.content,
+    )
 
 
 @api_router.post("/sessions", response_model=SessionResponse)
@@ -601,3 +742,104 @@ def complete_review(
     updated = ReviewScheduler().complete_review(review, correctness=evaluation.correctness)
     saved = get_review_repository(db).save(updated)
     return ReviewResponse.model_validate(saved)
+
+
+@api_router.post("/learners/{learner_id}/checkpoints/{checkpoint_id}/attempt", response_model=CheckpointAttemptResponse)
+def submit_checkpoint_attempt(
+    learner_id: str,
+    checkpoint_id: str,
+    payload: SubmitCheckpointAttemptRequest,
+    current_account: Account = Depends(require_csrf),
+    db: DbSession = Depends(get_db_session),
+) -> CheckpointAttemptResponse:
+    if learner_id != current_account.learner_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    learner = get_learner_repository(db).get(learner_id)
+    if learner is None:
+        raise HTTPException(status_code=404, detail="Learner not found")
+    sessions = get_session_repository(db).list_for_learner(learner_id, limit=1)
+    if not sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = sessions[0]
+    concept = get_curriculum_repository(db).get_by_slug(_normalize_topic_for_learner(db, learner_id, session.topic))
+    if concept is None:
+        raise HTTPException(status_code=404, detail="Concept not found")
+    lesson_plan = get_lesson_plan_repository(db).get_active(learner_id, concept.slug)
+    if lesson_plan is None:
+        raise HTTPException(status_code=404, detail="Lesson plan not found")
+    course_workspace = get_course_workspace_service(db)
+    course = course_workspace.ensure_course(
+        learner=learner,
+        concept=concept,
+        lesson_plan=lesson_plan,
+    )
+    current_section = course_workspace.current_section(course)
+    if current_section is None:
+        raise HTTPException(status_code=404, detail="Course section not found")
+    active_step = lesson_plan.steps[current_section.position] if lesson_plan.steps and current_section.position < len(lesson_plan.steps) else None
+    section_content = course_workspace.get_or_create_section_content(
+        course=course,
+        section=current_section,
+        learner=learner,
+        concept=concept,
+        lesson_plan=lesson_plan,
+        active_step=active_step,
+        recent_messages=[turn.learner_message for turn in session.turns[-3:]],
+    )
+    checkpoint = next(
+        (
+            block.checkpoint
+            for block in section_content.content.blocks
+            if block.checkpoint is not None and block.checkpoint.id == checkpoint_id
+        ),
+        None,
+    )
+    if checkpoint is None:
+        raise HTTPException(status_code=404, detail="Checkpoint not found")
+
+    is_correct = payload.selected_option_id == checkpoint.correct_option_id
+    correctness = 0.9 if is_correct else 0.25
+    confidence = 0.8 if is_correct else 0.35
+    learner_model = LearnerModelService()
+    updated_learner = learner_model.update_after_evaluation(
+        learner=learner,
+        topic=concept.slug,
+        correctness=correctness,
+        confidence=confidence,
+        misconception_description=None if is_correct else checkpoint.explanation,
+    )
+    if checkpoint.objective_id is not None:
+        objective_generator = ObjectiveGenerator()
+        updated_learner.objective_states = objective_generator.ensure_states(
+            updated_learner.objective_states,
+            [checkpoint.objective_id],
+        )
+        updated_learner.objective_states = objective_generator.update_single_objective_state(
+            updated_learner.objective_states,
+            objective_id=checkpoint.objective_id,
+            correctness=correctness,
+            confidence=confidence,
+        )
+    updated_learner = get_learner_repository(db).save(updated_learner)
+    course_workspace.record_checkpoint_attempt(
+        learner_id=learner.id,
+        course_id=course.id,
+        session_id=session.id,
+        checkpoint_id=checkpoint.id,
+        selected_option_id=payload.selected_option_id,
+        is_correct=is_correct,
+        explanation=checkpoint.explanation,
+    )
+    course_workspace.advance_after_checkpoint(
+        course=course,
+        lesson_plan=lesson_plan,
+        is_correct=is_correct,
+    )
+
+    return CheckpointAttemptResponse(
+        checkpoint_id=checkpoint.id,
+        is_correct=is_correct,
+        explanation=checkpoint.explanation,
+        recommended_action="continue" if is_correct else "remediate",
+        updated_learner=LearnerResponse.model_validate(updated_learner),
+    )

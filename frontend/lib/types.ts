@@ -152,6 +152,31 @@ export type LessonSectionContent = {
   trace: GenerationTrace | null;
 };
 
+export type CourseSection = {
+  id: string;
+  course_id: string;
+  position: number;
+  title: string;
+  slug: string;
+  summary: string;
+  objective_ids: string[];
+  status: "available" | "active" | "completed";
+};
+
+export type Course = {
+  id: string;
+  learner_id: string;
+  title: string;
+  study_prompt: string;
+  topic_slug: string;
+  subject: string;
+  status: "active" | "completed" | "archived";
+  current_section_id: string | null;
+  sections: CourseSection[];
+  created_at: string;
+  updated_at: string;
+};
+
 export type ObjectiveProgress = {
   objective: ConceptObjective;
   mastery: number;
@@ -218,6 +243,8 @@ export type StudySessionResponse = {
 };
 
 export type LessonWorkspace = {
+  course: Course;
+  current_section: CourseSection | null;
   session: Session;
   lesson_plan: LessonPlan;
   active_step: LessonPlanStep | null;
@@ -230,4 +257,11 @@ export type CheckpointAttemptResponse = {
   explanation: string;
   recommended_action: string;
   updated_learner: Learner;
+};
+
+export type ActivateSectionResponse = {
+  course: Course;
+  lesson_plan: LessonPlan;
+  current_section: CourseSection | null;
+  section_content: LessonSectionContent;
 };

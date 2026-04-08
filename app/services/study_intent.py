@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import re
 
 from pydantic import BaseModel, Field
@@ -8,7 +7,7 @@ from pydantic import BaseModel, Field
 from app.models.api import CreateSessionRequest
 from app.models.domain import Concept, GenerationTrace, Learner, LessonPlan, Session, utc_now
 from app.services.lesson_planner import LessonPlannerService
-from app.services.llm import LlmError, LlmProvider
+from app.services.llm import LlmProvider
 from app.services.objectives import ObjectiveGenerator
 from app.services.repositories import CurriculumRepository, LearnerRepository, SessionRepository
 
@@ -22,8 +21,7 @@ class StudyIntentPayload(BaseModel):
 
 
 class StudyIntentService:
-    PROMPT_VERSION = "study_intent_v1"
-    FALLBACK_PROMPT_VERSION = "study_intent_fallback_v1"
+    PROMPT_VERSION = "study_intent_v2"
 
     def __init__(
         self,
@@ -39,7 +37,6 @@ class StudyIntentService:
         self.lesson_planner = lesson_planner
         self.llm_provider = llm_provider
         self.objective_generator = ObjectiveGenerator()
-        self.logger = logging.getLogger(__name__)
 
     def launch(
         self,
@@ -86,64 +83,46 @@ class StudyIntentService:
             "prompt": prompt,
         }
         request = (
-            "You are planning the first lesson for an adaptive AI tutor.\n"
-            "Return JSON only.\n"
-            "Infer a single teachable topic from the learner request.\n"
-            "Write a concise description and 3 to 5 concrete lesson objectives.\n"
-            "The topic slug must be short, lowercase, and hyphenated.\n\n"
-            f"Learner goal history: {learner.goal}\n"
-            f"Learner request for today: {prompt}\n"
-            f"Learner teaching style: {learner.learning_style.teaching_style}\n"
-            f"Learner prefers examples: {learner.learning_style.prefers_examples}\n"
+            "<task>\n"
+            "Interpret what the learner wants to study today and turn it into one teachable course topic.\n"
+            "Prefer a scoped, lesson-sized topic over a giant field when the request is broad.\n"
+            "</task>\n\n"
+            f"<learner_context>\n"
+            f"prior_goal: {learner.goal}\n"
+            f"request_for_today: {prompt}\n"
+            f"teaching_style: {learner.learning_style.teaching_style}\n"
+            f"prefers_examples: {learner.learning_style.prefers_examples}\n"
+            f"</learner_context>\n\n"
+            "<requirements>\n"
+            "- Infer exactly one teachable topic.\n"
+            "- Make the description specific enough to guide lesson generation.\n"
+            "- Write 3 to 5 concrete objectives that could appear in a real course outline.\n"
+            "- The topic slug must be lowercase and hyphenated.\n"
+            "- If the learner request is broad, choose the best first slice rather than mirroring the whole field.\n"
+            "</requirements>"
         )
-        try:
-            payload = self.llm_provider.generate_structured(
-                prompt=request,
-                schema=StudyIntentPayload,
-                schema_name="study_intent",
-            )
-            payload.topic_slug = _slugify(payload.topic_slug or payload.topic_title or prompt)
-            trace = GenerationTrace(
-                provider=self.llm_provider.provider_name,
-                model=self.llm_provider.model_name,
-                prompt_version=self.PROMPT_VERSION,
-                prompt_inputs=prompt_inputs,
-            )
-            return payload, trace
-        except LlmError as error:
-            self.logger.warning(
-                "Falling back to deterministic study intent learner_id=%s prompt=%s error_type=%s",
-                learner.id,
-                prompt,
-                type(error).__name__,
-            )
-            fallback = _fallback_payload(prompt)
-            trace = GenerationTrace(
-                provider="system",
-                model="fallback",
-                prompt_version=self.FALLBACK_PROMPT_VERSION,
-                prompt_inputs={**prompt_inputs, "error_type": type(error).__name__},
-            )
-            return fallback, trace
+        instructions = (
+            "You are a curriculum intake parser for an AI tutor.\n"
+            "Return only JSON matching the schema.\n"
+            "Be concrete and scope intelligently.\n"
+            "Avoid vague objectives like 'understand better' or 'learn basics' unless refined."
+        )
+        payload = self.llm_provider.generate_structured(
+            prompt=request,
+            schema=StudyIntentPayload,
+            schema_name="study_intent",
+            instructions=instructions,
+        )
+        payload.topic_slug = _slugify(payload.topic_slug or payload.topic_title or prompt)
+        trace = GenerationTrace(
+            provider=self.llm_provider.provider_name,
+            model=self.llm_provider.model_name,
+            prompt_version=self.PROMPT_VERSION,
+            prompt_inputs=prompt_inputs,
+        )
+        return payload, trace
 
 
 def _slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug or "custom-topic"
-
-
-def _fallback_payload(prompt: str) -> StudyIntentPayload:
-    normalized = prompt.strip()
-    title = normalized[:80].strip().rstrip(".?!") or "Custom Topic"
-    return StudyIntentPayload(
-        topic_slug=_slugify(title),
-        topic_title=title.title(),
-        subject="general",
-        description=f"A focused lesson on {title.lower()} tailored to the learner's request.",
-        objective_titles=[
-            "Core intuition",
-            "Key vocabulary",
-            "Basic application",
-            "Check understanding",
-        ],
-    )

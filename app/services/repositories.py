@@ -10,14 +10,21 @@ from app.models.domain import (
     Account,
     AuthSession,
     AuthSessionStatus,
+    CheckpointAttempt,
     Concept,
     ConceptObjective,
+    Course,
+    CourseSection,
+    CourseSectionContent,
+    CourseSectionStatus,
+    CourseStatus,
     EvaluationResult,
     GenerationTrace,
     Learner,
     LearningPreferences,
     LessonPlan,
     LessonPlanStep,
+    LessonSectionContent,
     Misconception,
     ObjectiveState,
     ReviewItem,
@@ -31,9 +38,13 @@ from app.models.domain import (
 from app.services.orm import (
     AccountRecord,
     AuthSessionRecord,
+    CheckpointAttemptRecord,
     ConceptObjectiveRecord,
     ConceptPrerequisiteRecord,
     ConceptRecord,
+    CourseRecord,
+    CourseSectionContentRecord,
+    CourseSectionRecord,
     LessonPlanRecord,
     LessonPlanStepRecord,
     LearnerMisconceptionRecord,
@@ -76,6 +87,14 @@ class LessonPlanRepository(Protocol):
     def get_active(self, learner_id: str, topic: str) -> LessonPlan | None: ...
     def save(self, lesson_plan: LessonPlan) -> LessonPlan: ...
     def supersede_active(self, learner_id: str, topic: str) -> None: ...
+
+
+class CourseRepository(Protocol):
+    def get_active(self, learner_id: str, topic_slug: str) -> Course | None: ...
+    def save(self, course: Course) -> Course: ...
+    def get_section_content(self, course_id: str, section_id: str) -> CourseSectionContent | None: ...
+    def save_section_content(self, section_content: CourseSectionContent) -> CourseSectionContent: ...
+    def create_checkpoint_attempt(self, attempt: CheckpointAttempt) -> CheckpointAttempt: ...
 
 
 class AccountRepository(Protocol):
@@ -248,6 +267,59 @@ def _lesson_plan_from_record(record: LessonPlanRecord) -> LessonPlan:
         updated_at=record.updated_at,
     )
 
+
+def _course_from_record(record: CourseRecord) -> Course:
+    return Course(
+        id=record.id,
+        learner_id=record.learner_id,
+        title=record.title,
+        study_prompt=record.study_prompt,
+        topic_slug=record.topic_slug,
+        subject=record.subject,
+        status=CourseStatus(record.status),
+        current_section_id=record.current_section_id,
+        sections=[
+            CourseSection(
+                id=section.id,
+                course_id=section.course_id,
+                position=section.position,
+                title=section.title,
+                slug=section.slug,
+                summary=section.summary,
+                objective_ids=list(section.objective_ids or []),
+                status=CourseSectionStatus(section.status),
+            )
+            for section in record.sections
+        ],
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _course_section_content_from_record(record: CourseSectionContentRecord) -> CourseSectionContent:
+    return CourseSectionContent(
+        id=record.id,
+        course_id=record.course_id,
+        section_id=record.section_id,
+        content=LessonSectionContent.model_validate(record.content),
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _checkpoint_attempt_from_record(record: CheckpointAttemptRecord) -> CheckpointAttempt:
+    return CheckpointAttempt(
+        id=record.id,
+        learner_id=record.learner_id,
+        course_id=record.course_id,
+        session_id=record.session_id,
+        checkpoint_id=record.checkpoint_id,
+        selected_option_id=record.selected_option_id,
+        is_correct=record.is_correct,
+        explanation=record.explanation,
+        created_at=record.created_at,
+    )
+
 def _learner_query():
     return select(LearnerRecord).options(
         selectinload(LearnerRecord.topic_states),
@@ -269,6 +341,10 @@ def _concept_query():
 
 def _lesson_plan_query():
     return select(LessonPlanRecord).options(selectinload(LessonPlanRecord.steps))
+
+
+def _course_query():
+    return select(CourseRecord).options(selectinload(CourseRecord.sections))
 
 
 class SqlLearnerRepository:
@@ -675,6 +751,136 @@ class SqlLessonPlanRepository:
         self.db.commit()
         refreshed = self.db.execute(_lesson_plan_query().where(LessonPlanRecord.id == lesson_plan.id)).scalar_one()
         return _lesson_plan_from_record(refreshed)
+
+
+class SqlCourseRepository:
+    def __init__(self, db: DbSession) -> None:
+        self.db = db
+
+    def get_active(self, learner_id: str, topic_slug: str) -> Course | None:
+        record = self.db.execute(
+            _course_query()
+            .where(
+                CourseRecord.learner_id == learner_id,
+                CourseRecord.topic_slug == topic_slug,
+                CourseRecord.status == CourseStatus.ACTIVE.value,
+            )
+            .order_by(CourseRecord.updated_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        return _course_from_record(record) if record is not None else None
+
+    def save(self, course: Course) -> Course:
+        record = self.db.get(CourseRecord, course.id)
+        if record is None:
+            record = CourseRecord(
+                id=course.id,
+                learner_id=course.learner_id,
+                title=course.title,
+                study_prompt=course.study_prompt,
+                topic_slug=course.topic_slug,
+                subject=course.subject,
+                status=course.status.value,
+                current_section_id=course.current_section_id,
+                created_at=course.created_at,
+                updated_at=course.updated_at,
+            )
+            record.sections = [
+                CourseSectionRecord(
+                    id=section.id,
+                    position=section.position,
+                    title=section.title,
+                    slug=section.slug,
+                    summary=section.summary,
+                    objective_ids=list(section.objective_ids),
+                    status=section.status.value,
+                )
+                for section in course.sections
+            ]
+        else:
+            record.title = course.title
+            record.study_prompt = course.study_prompt
+            record.topic_slug = course.topic_slug
+            record.subject = course.subject
+            record.status = course.status.value
+            record.current_section_id = course.current_section_id
+            record.updated_at = course.updated_at
+            existing_sections_by_id = {section.id: section for section in record.sections}
+            desired_ids = {section.id for section in course.sections}
+            for section_record in list(record.sections):
+                if section_record.id not in desired_ids:
+                    record.sections.remove(section_record)
+                    self.db.delete(section_record)
+            for section in course.sections:
+                section_record = existing_sections_by_id.get(section.id)
+                if section_record is None:
+                    record.sections.append(
+                        CourseSectionRecord(
+                            id=section.id,
+                            position=section.position,
+                            title=section.title,
+                            slug=section.slug,
+                            summary=section.summary,
+                            objective_ids=list(section.objective_ids),
+                            status=section.status.value,
+                        )
+                    )
+                else:
+                    section_record.position = section.position
+                    section_record.title = section.title
+                    section_record.slug = section.slug
+                    section_record.summary = section.summary
+                    section_record.objective_ids = list(section.objective_ids)
+                    section_record.status = section.status.value
+        self.db.add(record)
+        self.db.commit()
+        refreshed = self.db.execute(_course_query().where(CourseRecord.id == course.id)).scalar_one()
+        return _course_from_record(refreshed)
+
+    def get_section_content(self, course_id: str, section_id: str) -> CourseSectionContent | None:
+        record = self.db.execute(
+            select(CourseSectionContentRecord).where(
+                CourseSectionContentRecord.course_id == course_id,
+                CourseSectionContentRecord.section_id == section_id,
+            )
+        ).scalar_one_or_none()
+        return _course_section_content_from_record(record) if record is not None else None
+
+    def save_section_content(self, section_content: CourseSectionContent) -> CourseSectionContent:
+        record = self.db.get(CourseSectionContentRecord, section_content.id)
+        if record is None:
+            record = CourseSectionContentRecord(
+                id=section_content.id,
+                course_id=section_content.course_id,
+                section_id=section_content.section_id,
+                content=section_content.content.model_dump(mode="json"),
+                created_at=section_content.created_at,
+                updated_at=section_content.updated_at,
+            )
+        else:
+            record.content = section_content.content.model_dump(mode="json")
+            record.updated_at = section_content.updated_at
+
+        self.db.add(record)
+        self.db.commit()
+        self.db.refresh(record)
+        return _course_section_content_from_record(record)
+
+    def create_checkpoint_attempt(self, attempt: CheckpointAttempt) -> CheckpointAttempt:
+        record = CheckpointAttemptRecord(
+            id=attempt.id,
+            learner_id=attempt.learner_id,
+            course_id=attempt.course_id,
+            session_id=attempt.session_id,
+            checkpoint_id=attempt.checkpoint_id,
+            selected_option_id=attempt.selected_option_id,
+            is_correct=attempt.is_correct,
+            explanation=attempt.explanation,
+            created_at=attempt.created_at,
+        )
+        self.db.add(record)
+        self.db.commit()
+        return _checkpoint_attempt_from_record(record)
 
 
 class SqlAccountRepository:

@@ -27,7 +27,7 @@ class LlmEvaluationPayload(BaseModel):
 
 
 class OpenAIEvaluationService:
-    PROMPT_VERSION = "evaluation_v2"
+    PROMPT_VERSION = "evaluation_v3"
 
     def __init__(self, llm_provider: LlmProvider) -> None:
         self.llm_provider = llm_provider
@@ -50,21 +50,41 @@ class OpenAIEvaluationService:
             "learner_message": learner_message,
         }
         prompt = (
-            "You are evaluating a learner response for an adaptive tutoring system.\n"
-            "Return JSON only.\n"
-            "Score the learner's demonstrated understanding, not politeness or fluency.\n"
-            "Choose objective_id from the provided objectives when possible.\n"
-            "If no objective clearly matches, return null.\n"
-            "Set misconception_detected to true only when the answer reveals a concrete misunderstanding.\n\n"
-            f"Topic: {topic}\n"
-            f"Objectives:\n{objective_lines}\n\n"
-            f"Learner response:\n{learner_message}"
+            "<task>\n"
+            "Evaluate a learner response for tutoring state updates.\n"
+            "Judge demonstrated understanding, not writing quality, confidence theater, or politeness.\n"
+            "</task>\n\n"
+            f"<topic>\n{topic}\n</topic>\n\n"
+            f"<objectives>\n{objective_lines}\n</objectives>\n\n"
+            f"<learner_response>\n{learner_message}\n</learner_response>\n\n"
+            "<scoring_rubric>\n"
+            "correctness:\n"
+            "- 0.0 to 0.2 = off-topic, wrong, or empty understanding\n"
+            "- 0.3 to 0.5 = partial but shaky understanding\n"
+            "- 0.6 to 0.8 = mostly correct with useful understanding\n"
+            "- 0.9 to 1.0 = clearly correct and well grounded\n"
+            "confidence:\n"
+            "- Estimate how confidently the learner seems to understand the idea, not their tone alone.\n"
+            "objective_id:\n"
+            "- Pick the one objective most evidenced by the response.\n"
+            "- Return null if the response is too broad or no objective clearly matches.\n"
+            "misconception_detected:\n"
+            "- True only when the response reveals a specific conceptual misunderstanding, not just incompleteness.\n"
+            "</scoring_rubric>"
+        )
+        instructions = (
+            "You are a strict but fair tutoring evaluator.\n"
+            "Return only JSON matching the schema.\n"
+            "Be calibrated rather than generous.\n"
+            "Use the provided objectives as the only valid source for objective_id.\n"
+            "Keep reasoning short and diagnostic."
         )
 
         payload = self.llm_provider.generate_structured(
             prompt=prompt,
             schema=LlmEvaluationPayload,
             schema_name="learner_evaluation",
+            instructions=instructions,
         )
         objective_ids = {objective.id for objective in objectives}
         objective_id = payload.objective_id if payload.objective_id in objective_ids else None

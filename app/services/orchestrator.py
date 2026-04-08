@@ -65,38 +65,6 @@ class SessionOrchestrator:
         self.objective_generator = objective_generator
         self.teacher = teacher
 
-    def _build_fallback_step(
-        self,
-        *,
-        topic: str,
-        action: TutorAction,
-        focus_objective: ConceptObjective | None,
-    ) -> LessonPlanStep:
-        step_title = focus_objective.title if focus_objective is not None else f"Build understanding in {topic}"
-        instruction = (
-            f"Focus on {focus_objective.title.lower()} in {topic}."
-            if focus_objective is not None
-            else f"Keep building understanding in {topic} through the current exchange."
-        )
-        rationale = (
-            "This step keeps the lesson grounded in the learner's current need until a fuller plan is available."
-        )
-        step_type_map = {
-            TutorAction.EXPLAIN: "explain",
-            TutorAction.ASK_DIAGNOSTIC: "diagnostic",
-            TutorAction.ASK_PRACTICE: "practice",
-            TutorAction.REINFORCE: "review",
-            TutorAction.ADVANCE: "advance",
-        }
-        return LessonPlanStep(
-            title=step_title,
-            objective_id=focus_objective.id if focus_objective is not None else None,
-            objective_slug=focus_objective.slug if focus_objective is not None else None,
-            instruction=instruction,
-            rationale=rationale,
-            step_type=step_type_map[action],
-        )
-
     def handle_turn(
         self,
         session_id: str,
@@ -197,14 +165,11 @@ class SessionOrchestrator:
         content_snippets = []
         lesson_plan: LessonPlan | None = None
         if current_concept is not None:
-            try:
-                lesson_plan = self.lesson_planner.get_or_create_plan(
-                    learner=updated_learner,
-                    concept=current_concept,
-                    content_snippets=content_snippets,
-                )
-            except LlmError:
-                lesson_plan = self.lesson_plan_repository.get_active(updated_learner.id, current_topic)
+            lesson_plan = self.lesson_planner.get_or_create_plan(
+                learner=updated_learner,
+                concept=current_concept,
+                content_snippets=content_snippets,
+            )
         next_concept: Concept | None = None
         if action == TutorAction.ADVANCE:
             concepts = self.curriculum_repository.list_concepts()
@@ -228,12 +193,6 @@ class SessionOrchestrator:
         if lesson_plan is not None and lesson_plan.steps:
             active_index = min(max(lesson_plan.current_step_index, 0), len(lesson_plan.steps) - 1)
             active_lesson_step = lesson_plan.steps[active_index]
-        else:
-            active_lesson_step = self._build_fallback_step(
-                topic=current_topic,
-                action=action,
-                focus_objective=focus_objective,
-            )
 
         try:
             teaching_response = self.teacher.respond(

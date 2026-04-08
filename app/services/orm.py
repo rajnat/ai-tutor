@@ -156,6 +156,80 @@ class LessonPlanStepRecord(Base):
     lesson_plan: Mapped["LessonPlanRecord"] = relationship(back_populates="steps")
 
 
+class CourseRecord(Base):
+    __tablename__ = "courses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    learner_id: Mapped[str] = mapped_column(String(36), ForeignKey("learners.id"), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    study_prompt: Mapped[str] = mapped_column(Text())
+    topic_slug: Mapped[str] = mapped_column(String(255), index=True)
+    subject: Mapped[str] = mapped_column(String(255), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    current_section_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    sections: Mapped[list["CourseSectionRecord"]] = relationship(
+        back_populates="course",
+        cascade="all, delete-orphan",
+        order_by="CourseSectionRecord.position",
+    )
+    contents: Mapped[list["CourseSectionContentRecord"]] = relationship(
+        back_populates="course",
+        cascade="all, delete-orphan",
+    )
+
+
+class CourseSectionRecord(Base):
+    __tablename__ = "course_sections"
+    __table_args__ = (UniqueConstraint("course_id", "position", name="uq_course_section_position"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    course_id: Mapped[str] = mapped_column(String(36), ForeignKey("courses.id"), index=True)
+    position: Mapped[int] = mapped_column(index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    slug: Mapped[str] = mapped_column(String(255), index=True)
+    summary: Mapped[str] = mapped_column(Text())
+    objective_ids: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    course: Mapped["CourseRecord"] = relationship(back_populates="sections")
+    contents: Mapped[list["CourseSectionContentRecord"]] = relationship(
+        back_populates="section",
+        cascade="all, delete-orphan",
+    )
+
+
+class CourseSectionContentRecord(Base):
+    __tablename__ = "course_section_contents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    course_id: Mapped[str] = mapped_column(String(36), ForeignKey("courses.id"), index=True)
+    section_id: Mapped[str] = mapped_column(String(36), ForeignKey("course_sections.id"), index=True)
+    content: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    course: Mapped["CourseRecord"] = relationship(back_populates="contents")
+    section: Mapped["CourseSectionRecord"] = relationship(back_populates="contents")
+
+
+class CheckpointAttemptRecord(Base):
+    __tablename__ = "checkpoint_attempts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    learner_id: Mapped[str] = mapped_column(String(36), ForeignKey("learners.id"), index=True)
+    course_id: Mapped[str] = mapped_column(String(36), ForeignKey("courses.id"), index=True)
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.id"), index=True)
+    checkpoint_id: Mapped[str] = mapped_column(String(36), index=True)
+    selected_option_id: Mapped[str] = mapped_column(String(64))
+    is_correct: Mapped[bool] = mapped_column(Boolean, default=False)
+    explanation: Mapped[str] = mapped_column(Text())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class ReviewItemRecord(Base):
     __tablename__ = "review_items"
 

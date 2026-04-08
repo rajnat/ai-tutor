@@ -4,6 +4,7 @@ from fastapi import Cookie, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session as DbSession
 
 from app.models.domain import Account, AuthSessionStatus
+from app.services.course_workspace import CourseWorkspaceService
 from app.services.auth import AuthService
 from app.services.content_library import ContentLibraryService
 from app.services.curriculum import CurriculumPlanner
@@ -11,6 +12,7 @@ from app.services.database import get_db_session
 from app.services.evaluation import OpenAIEvaluationService
 from app.services.learner_model import LearnerModelService
 from app.services.lesson_planner import LessonPlannerService
+from app.services.lesson_content import LessonContentService
 from app.services.llm import OpenAIResponsesProvider, StubResponsesProvider
 from app.services.memory import LearningMemoryService
 from app.services.objectives import ObjectiveGenerator
@@ -18,6 +20,7 @@ from app.services.orchestrator import SessionOrchestrator
 from app.services.progress import ProgressService
 from app.services.repositories import (
     SqlAccountRepository,
+    SqlCourseRepository,
     SqlCurriculumRepository,
     SqlLessonPlanRepository,
     SqlLearnerRepository,
@@ -59,6 +62,10 @@ def get_lesson_plan_repository(db: DbSession) -> SqlLessonPlanRepository:
 
 def get_account_repository(db: DbSession) -> SqlAccountRepository:
     return SqlAccountRepository(db)
+
+
+def get_course_repository(db: DbSession) -> SqlCourseRepository:
+    return SqlCourseRepository(db)
 
 
 def get_progress_service(db: DbSession) -> ProgressService:
@@ -171,4 +178,16 @@ def get_study_intent_service(db: DbSession) -> StudyIntentService:
             llm_provider=get_llm_provider(),
         ),
         llm_provider=get_llm_provider(),
+    )
+
+
+def get_lesson_content_service() -> LessonContentService:
+    return LessonContentService(llm_provider=get_llm_provider())
+
+
+def get_course_workspace_service(db: DbSession) -> CourseWorkspaceService:
+    return CourseWorkspaceService(
+        course_repository=get_course_repository(db),
+        lesson_plan_repository=get_lesson_plan_repository(db),
+        lesson_content_service=get_lesson_content_service(),
     )

@@ -6,7 +6,12 @@ from app.models.domain import (
     Account,
     Concept,
     ConceptObjective,
+    Course,
+    CourseSection,
     EvaluationResult,
+    LessonCheckpoint,
+    LessonContentBlock,
+    LessonSectionContent,
     Learner,
     LearningPreferences,
     LessonPlan,
@@ -50,6 +55,14 @@ class CreateConceptRequest(BaseModel):
 
 class CompleteReviewRequest(BaseModel):
     answer: str = Field(min_length=1)
+
+
+class SubmitCheckpointAttemptRequest(BaseModel):
+    selected_option_id: str = Field(min_length=1)
+
+
+class ActivateSectionRequest(BaseModel):
+    section_id: str = Field(min_length=1)
 
 
 class SignupRequest(BaseModel):
@@ -128,6 +141,50 @@ class SubmitTurnResponse(BaseModel):
     active_lesson_step: LessonPlanStepResponse | None = None
     updated_learner: LearnerResponse
     updated_session: SessionResponse
+
+
+class LessonCheckpointResponse(LessonCheckpoint):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LessonContentBlockResponse(LessonContentBlock):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LessonSectionContentResponse(LessonSectionContent):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CourseSectionResponse(CourseSection):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CourseResponse(Course):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LessonWorkspaceResponse(BaseModel):
+    course: CourseResponse
+    current_section: CourseSectionResponse | None = None
+    session: SessionResponse
+    lesson_plan: LessonPlanResponse
+    active_step: LessonPlanStepResponse | None = None
+    section_content: LessonSectionContentResponse
+
+
+class CheckpointAttemptResponse(BaseModel):
+    checkpoint_id: str
+    is_correct: bool
+    explanation: str
+    recommended_action: str
+    updated_learner: LearnerResponse
+
+
+class ActivateSectionResponse(BaseModel):
+    course: CourseResponse
+    lesson_plan: LessonPlanResponse
+    current_section: CourseSectionResponse | None = None
+    section_content: LessonSectionContentResponse
 
 
 class StudySessionResponse(BaseModel):

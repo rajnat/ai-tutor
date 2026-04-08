@@ -113,6 +113,96 @@ class TeachingResponse(BaseModel):
     trace: GenerationTrace | None = None
 
 
+class CheckpointOption(BaseModel):
+    id: str
+    label: str
+    text: str
+
+
+class LessonCheckpoint(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    kind: Literal["mcq", "short_answer"] = "mcq"
+    prompt: str
+    objective_id: str | None = None
+    objective_slug: str | None = None
+    options: list[CheckpointOption] = Field(default_factory=list)
+    correct_option_id: str | None = None
+    explanation: str
+
+
+class LessonContentBlock(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    type: Literal["heading", "paragraph", "example", "checkpoint_mcq", "summary", "go_deeper"]
+    text: str | None = None
+    checkpoint: LessonCheckpoint | None = None
+    prompts: list[str] = Field(default_factory=list)
+
+
+class LessonSectionContent(BaseModel):
+    title: str
+    subtitle: str | None = None
+    blocks: list[LessonContentBlock] = Field(default_factory=list)
+    trace: GenerationTrace | None = None
+
+
+class CourseStatus(str, Enum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    ARCHIVED = "archived"
+
+
+class CourseSectionStatus(str, Enum):
+    AVAILABLE = "available"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+
+
+class CourseSection(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    course_id: str
+    position: int
+    title: str
+    slug: str
+    summary: str
+    objective_ids: list[str] = Field(default_factory=list)
+    status: CourseSectionStatus = CourseSectionStatus.AVAILABLE
+
+
+class CourseSectionContent(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    course_id: str
+    section_id: str
+    content: LessonSectionContent
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class Course(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    learner_id: str
+    title: str
+    study_prompt: str
+    topic_slug: str
+    subject: str
+    status: CourseStatus = CourseStatus.ACTIVE
+    current_section_id: str | None = None
+    sections: list[CourseSection] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class CheckpointAttempt(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    learner_id: str
+    course_id: str
+    session_id: str
+    checkpoint_id: str
+    selected_option_id: str
+    is_correct: bool
+    explanation: str
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class LearningMemoryContext(BaseModel):
     summary: str
     related_turns: list[str] = Field(default_factory=list)
