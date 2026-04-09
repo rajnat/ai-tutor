@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = False
     cors_allowed_origins: str = "http://localhost:3000,http://localhost:3001"
     llm_provider: str = "openai"
-    openai_model: str = "gpt-4.1-mini"
+    openai_model: str = "gpt-5.4"
     openai_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("ADAPTIVE_TUTOR_OPENAI_API_KEY", "OPENAI_API_KEY"),
