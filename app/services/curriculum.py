@@ -1,7 +1,11 @@
 from app.models.domain import Concept, ConceptObjective, Learner, SessionMode, TutorAction
+from app.services.tutor_config import DEFAULT_CONFIG, TutorConfig
 
 
 class CurriculumPlanner:
+    def __init__(self, config: TutorConfig = DEFAULT_CONFIG) -> None:
+        self.config = config
+
     def choose_action(
         self,
         topic: str,
@@ -13,9 +17,9 @@ class CurriculumPlanner:
             return TutorAction.ASK_PRACTICE
         if mode == SessionMode.REVIEW or misconception_detected:
             return TutorAction.REINFORCE
-        if mastery < 0.3:
+        if mastery < self.config.mastery_novice_threshold:
             return TutorAction.EXPLAIN
-        if mastery < 0.7:
+        if mastery < self.config.mastery_intermediate_threshold:
             return TutorAction.ASK_DIAGNOSTIC
         return TutorAction.ADVANCE
 
@@ -25,11 +29,12 @@ class CurriculumPlanner:
 
         ready_concepts: list[tuple[float, Concept]] = []
         for concept in concepts:
-            if concept.slug in learner.skills and learner.skills[concept.slug].mastery >= 0.8:
+            if concept.slug in learner.skills and learner.skills[concept.slug].mastery >= self.config.mastery_complete_threshold:
                 continue
 
             prereqs_met = all(
-                learner.skills.get(prereq) is not None and learner.skills[prereq].mastery >= 0.6
+                learner.skills.get(prereq) is not None
+                and learner.skills[prereq].mastery >= self.config.prerequisite_mastery_threshold
                 for prereq in concept.prerequisites
             )
             if not prereqs_met and concept.prerequisites:
@@ -53,7 +58,7 @@ class CurriculumPlanner:
             return False
         if not concept.objectives:
             state = learner.skills.get(concept.slug)
-            return state is not None and state.mastery >= 0.8
+            return state is not None and state.mastery >= self.config.mastery_complete_threshold
 
         for objective in concept.objectives:
             state = learner.objective_states.get(objective.id)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.models.domain import ConceptObjective, ObjectiveState
+from app.services.tutor_config import DEFAULT_CONFIG, TutorConfig
 
 
 def utc_now() -> datetime:
@@ -10,6 +11,9 @@ def utc_now() -> datetime:
 
 
 class ObjectiveGenerator:
+    def __init__(self, config: TutorConfig = DEFAULT_CONFIG) -> None:
+        self.config = config
+
     DEFAULT_SUFFIXES = [
         ("intuition", "Conceptual intuition"),
         ("notation", "Notation and vocabulary"),
@@ -59,13 +63,18 @@ class ObjectiveGenerator:
         confidence: float,
         scale: float = 1.0,
     ) -> dict[str, ObjectiveState]:
+        cfg = self.config
         now = utc_now()
         for objective_id in objective_ids:
             state = objective_states.setdefault(objective_id, ObjectiveState())
-            state.mastery = min(1.0, max(0.0, state.mastery + (((correctness - 0.3) * 0.2) * scale)))
+            state.mastery = min(
+                1.0,
+                max(0.0, state.mastery + (((correctness - cfg.objective_neutral_correctness) * cfg.mastery_update_scale) * scale)),
+            )
+            blend = cfg.confidence_blend_factor * scale
             state.confidence = min(
                 1.0,
-                max(0.0, (state.confidence * (1 - (0.4 * scale))) + (confidence * (0.4 * scale))),
+                max(0.0, (state.confidence * (1 - blend)) + (confidence * blend)),
             )
             state.last_practiced_at = now
         return objective_states

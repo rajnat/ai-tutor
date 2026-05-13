@@ -57,8 +57,10 @@ from app.services.dependencies import (
 )
 from app.services.lesson_planner import LessonPlannerService
 from app.services.learner_model import LearnerModelService
+from app.services.llm import LlmError
 from app.services.objectives import ObjectiveGenerator
 from app.services.review import ReviewScheduler
+from app.services.tutor_config import DEFAULT_CONFIG
 
 api_router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger(__name__)
@@ -312,11 +314,14 @@ def create_study_session(
     if learner is None:
         raise HTTPException(status_code=404, detail="Learner not found")
 
-    updated_learner, concept, lesson_plan, session = get_study_intent_service(db).launch(
-        learner=learner,
-        prompt=payload.prompt,
-        mode=payload.mode.value,
-    )
+    try:
+        updated_learner, concept, lesson_plan, session = get_study_intent_service(db).launch(
+            learner=learner,
+            prompt=payload.prompt,
+            mode=payload.mode.value,
+        )
+    except LlmError as exc:
+        raise HTTPException(status_code=502, detail="AI service unavailable — please try again shortly") from exc
     get_course_workspace_service(db).ensure_course(
         learner=updated_learner,
         concept=concept,
@@ -440,10 +445,13 @@ def get_lesson_plan(
             learner_id,
             normalized_topic,
         )
-        lesson_plan = LessonPlannerService(
-            lesson_plan_repository=lesson_plan_repository,
-            llm_provider=get_orchestrator(db).lesson_planner.llm_provider,
-        ).create_plan(learner=learner, concept=concept, content_snippets=[])
+        try:
+            lesson_plan = LessonPlannerService(
+                lesson_plan_repository=lesson_plan_repository,
+                llm_provider=get_orchestrator(db).lesson_planner.llm_provider,
+            ).create_plan(learner=learner, concept=concept, content_snippets=[])
+        except LlmError as exc:
+            raise HTTPException(status_code=502, detail="AI service unavailable — please try again shortly") from exc
     logger.info(
         "Loaded lesson plan learner_id=%s requested_topic=%s normalized_topic=%s step_count=%s",
         learner_id,
@@ -496,15 +504,18 @@ def get_lesson_workspace(
         if lesson_plan.steps and current_section.position < len(lesson_plan.steps)
         else None
     )
-    section_content = course_workspace.get_or_create_section_content(
-        course=course,
-        section=current_section,
-        learner=learner,
-        concept=concept,
-        lesson_plan=lesson_plan,
-        active_step=active_step,
-        recent_messages=[turn.learner_message for turn in session.turns[-3:]],
-    )
+    try:
+        section_content = course_workspace.get_or_create_section_content(
+            course=course,
+            section=current_section,
+            learner=learner,
+            concept=concept,
+            lesson_plan=lesson_plan,
+            active_step=active_step,
+            recent_messages=[turn.learner_message for turn in session.turns[-3:]],
+        )
+    except LlmError as exc:
+        raise HTTPException(status_code=502, detail="AI service unavailable — please try again shortly") from exc
     return LessonWorkspaceResponse(
         course=course,
         current_section=current_section,
@@ -566,15 +577,18 @@ def activate_course_section(
         if lesson_plan.steps and current_section.position < len(lesson_plan.steps)
         else None
     )
-    section_content = course_workspace.get_or_create_section_content(
-        course=course,
-        section=current_section,
-        learner=learner,
-        concept=concept,
-        lesson_plan=lesson_plan,
-        active_step=active_step,
-        recent_messages=[turn.learner_message for turn in session.turns[-3:]],
-    )
+    try:
+        section_content = course_workspace.get_or_create_section_content(
+            course=course,
+            section=current_section,
+            learner=learner,
+            concept=concept,
+            lesson_plan=lesson_plan,
+            active_step=active_step,
+            recent_messages=[turn.learner_message for turn in session.turns[-3:]],
+        )
+    except LlmError as exc:
+        raise HTTPException(status_code=502, detail="AI service unavailable — please try again shortly") from exc
     return ActivateSectionResponse(
         course=course,
         lesson_plan=LessonPlanResponse.model_validate(lesson_plan),
@@ -809,15 +823,18 @@ def submit_checkpoint_attempt(
     if current_section is None:
         raise HTTPException(status_code=404, detail="Course section not found")
     active_step = lesson_plan.steps[current_section.position] if lesson_plan.steps and current_section.position < len(lesson_plan.steps) else None
-    section_content = course_workspace.get_or_create_section_content(
-        course=course,
-        section=current_section,
-        learner=learner,
-        concept=concept,
-        lesson_plan=lesson_plan,
-        active_step=active_step,
-        recent_messages=[turn.learner_message for turn in session.turns[-3:]],
-    )
+    try:
+        section_content = course_workspace.get_or_create_section_content(
+            course=course,
+            section=current_section,
+            learner=learner,
+            concept=concept,
+            lesson_plan=lesson_plan,
+            active_step=active_step,
+            recent_messages=[turn.learner_message for turn in session.turns[-3:]],
+        )
+    except LlmError as exc:
+        raise HTTPException(status_code=502, detail="AI service unavailable — please try again shortly") from exc
     checkpoint = next(
         (
             block.checkpoint
@@ -830,8 +847,8 @@ def submit_checkpoint_attempt(
         raise HTTPException(status_code=404, detail="Checkpoint not found")
 
     is_correct = payload.selected_option_id == checkpoint.correct_option_id
-    correctness = 0.9 if is_correct else 0.25
-    confidence = 0.8 if is_correct else 0.35
+    correctness = DEFAULT_CONFIG.checkpoint_correct_correctness if is_correct else DEFAULT_CONFIG.checkpoint_wrong_correctness
+    confidence = DEFAULT_CONFIG.checkpoint_correct_confidence if is_correct else DEFAULT_CONFIG.checkpoint_wrong_confidence
     learner_model = LearnerModelService()
     updated_learner = learner_model.update_after_evaluation(
         learner=learner,

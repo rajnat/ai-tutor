@@ -30,6 +30,7 @@ from app.services.repositories import (
 from app.services.review import ReviewScheduler
 from app.services.teaching import Teacher
 from app.services.content_library import ContentLibraryService
+from app.services.tutor_config import DEFAULT_CONFIG, TutorConfig
 
 
 class SessionOrchestrator:
@@ -49,7 +50,9 @@ class SessionOrchestrator:
         review_scheduler: ReviewScheduler,
         objective_generator: ObjectiveGenerator,
         teacher: Teacher,
+        config: TutorConfig = DEFAULT_CONFIG,
     ) -> None:
+        self.config = config
         self.learner_repository = learner_repository
         self.session_repository = session_repository
         self.review_repository = review_repository
@@ -90,7 +93,7 @@ class SessionOrchestrator:
             evaluation_available = False
             evaluation = EvaluationResult(
                 correctness=0.5,
-                confidence=0.2,
+                confidence=self.config.degraded_evaluation_confidence,
                 reasoning="Evaluation unavailable because the language model could not be reached.",
                 trace=GenerationTrace(
                     provider="system",
@@ -126,13 +129,14 @@ class SessionOrchestrator:
                 spillover_objectives = [
                     objective_id for objective_id in objective_ids if objective_id != evaluation.objective_id
                 ]
-                if spillover_objectives and evaluation.correctness >= 0.6:
+                cfg = self.config
+                if spillover_objectives and evaluation.correctness >= cfg.spillover_min_correctness:
                     updated_learner.objective_states = self.objective_generator.update_objective_states(
                         updated_learner.objective_states,
                         spillover_objectives,
                         correctness=evaluation.correctness,
                         confidence=evaluation.confidence,
-                        scale=0.8 if evaluation.correctness >= 0.7 else 0.35,
+                        scale=cfg.spillover_scale_high if evaluation.correctness >= cfg.spillover_high_boundary else cfg.spillover_scale_low,
                     )
             else:
                 updated_learner.objective_states = self.objective_generator.update_objective_states(

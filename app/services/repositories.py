@@ -6,6 +6,7 @@ from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.orm import Session as DbSession, selectinload
 
 from app.models.api import CreateLearnerRequest, CreateSessionRequest
+from app.services.tutor_config import DEFAULT_CONFIG
 from app.models.domain import (
     Account,
     AuthSession,
@@ -358,7 +359,10 @@ class SqlLearnerRepository:
             learning_style=payload.preferences,
         )
         if payload.initial_topic:
-            learner.skills[payload.initial_topic] = TopicState(mastery=0.2, confidence=0.2)
+            learner.skills[payload.initial_topic] = TopicState(
+                mastery=DEFAULT_CONFIG.initial_known_topic_mastery,
+                confidence=DEFAULT_CONFIG.initial_known_topic_confidence,
+            )
 
         record = LearnerRecord(
             id=learner.id,

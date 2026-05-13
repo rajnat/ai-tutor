@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from app.models.domain import Concept, ContentSnippet, GenerationTrace, Learner, LessonPlan, LessonPlanStep
 from app.services.llm import LlmProvider
 from app.services.repositories import LessonPlanRepository
+from app.services.tutor_config import DEFAULT_CONFIG, TutorConfig
 
 
 class LessonPlanStepPayload(BaseModel):
@@ -26,8 +27,14 @@ class LessonPlanPayload(BaseModel):
 class LessonPlannerService:
     PROMPT_VERSION = "lesson_plan_v2"
 
-    def __init__(self, lesson_plan_repository: LessonPlanRepository, llm_provider: LlmProvider) -> None:
+    def __init__(
+        self,
+        lesson_plan_repository: LessonPlanRepository,
+        llm_provider: LlmProvider,
+        config: TutorConfig = DEFAULT_CONFIG,
+    ) -> None:
         self.lesson_plan_repository = lesson_plan_repository
+        self.config = config
         self.llm_provider = llm_provider
 
     def get_or_create_plan(
@@ -144,14 +151,19 @@ class LessonPlannerService:
         current_index = min(max(lesson_plan.current_step_index, 0), len(lesson_plan.steps) - 1)
         current_step = lesson_plan.steps[current_index]
 
+        cfg = self.config
         should_complete = False
         if action == "advance" or topic_ready_to_advance:
             should_complete = True
-        elif current_step.objective_id and current_step.objective_id == focus_objective_id and correctness >= 0.7:
+        elif (
+            current_step.objective_id
+            and current_step.objective_id == focus_objective_id
+            and correctness >= cfg.step_complete_objective_threshold
+        ):
             should_complete = True
-        elif current_step.step_type in {"diagnostic", "practice", "review"} and correctness >= 0.75:
+        elif current_step.step_type in {"diagnostic", "practice", "review"} and correctness >= cfg.step_complete_generic_threshold:
             should_complete = True
-        elif current_step.step_type == "explain" and correctness >= 0.65:
+        elif current_step.step_type == "explain" and correctness >= cfg.step_complete_explain_threshold:
             should_complete = True
 
         if should_complete and current_step.id not in lesson_plan.completed_step_ids:

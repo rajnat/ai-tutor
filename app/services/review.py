@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from app.models.domain import Concept, ConceptObjective, ReviewItem, ReviewStatus
+from app.services.tutor_config import DEFAULT_CONFIG, TutorConfig
 
 
 def utc_now() -> datetime:
@@ -8,6 +9,9 @@ def utc_now() -> datetime:
 
 
 class ReviewScheduler:
+    def __init__(self, config: TutorConfig = DEFAULT_CONFIG) -> None:
+        self.config = config
+
     def build_review_prompt(
         self,
         *,
@@ -54,9 +58,14 @@ class ReviewScheduler:
         concept: Concept | None = None,
         focus_objective: ConceptObjective | None = None,
     ) -> ReviewItem:
+        cfg = self.config
         now = utc_now()
-        interval_days = 1 if correctness < 0.5 else 3 if correctness < 0.75 else 7
-        due_at = now if correctness < 0.5 else now + timedelta(days=interval_days)
+        interval_days = (
+            1 if correctness < cfg.review_short_interval_boundary
+            else 3 if correctness < cfg.review_medium_interval_boundary
+            else 7
+        )
+        due_at = now if correctness < cfg.review_short_interval_boundary else now + timedelta(days=interval_days)
         status = ReviewStatus.DUE if due_at <= now else ReviewStatus.SCHEDULED
         prompt, expected_answer = self.build_review_prompt(
             topic=topic,
@@ -88,20 +97,21 @@ class ReviewScheduler:
         return existing
 
     def complete_review(self, review_item: ReviewItem, correctness: float) -> ReviewItem:
+        cfg = self.config
         now = utc_now()
         next_interval = (
             max(review_item.interval_days + 1, review_item.interval_days * 2)
-            if correctness >= 0.8
+            if correctness >= cfg.review_double_interval_threshold
             else max(2, review_item.interval_days + 1)
-            if correctness >= 0.6
+            if correctness >= cfg.review_grow_interval_threshold
             else 1
         )
         review_item.review_count += 1
         review_item.last_reviewed_at = now
         review_item.interval_days = next_interval
         review_item.due_at = now + timedelta(days=next_interval)
-        review_item.status = ReviewStatus.SCHEDULED if correctness >= 0.5 else ReviewStatus.DUE
-        if correctness < 0.5:
+        review_item.status = ReviewStatus.SCHEDULED if correctness >= cfg.review_reschedule_threshold else ReviewStatus.DUE
+        if correctness < cfg.review_reschedule_threshold:
             review_item.due_at = now
         review_item.updated_at = now
         return review_item
