@@ -1,6 +1,10 @@
 import logging
+import threading
+import time
+from collections import defaultdict
+from functools import lru_cache
 
-from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
 from sqlalchemy.orm import Session as DbSession
 
 from app.models.api import (
@@ -58,6 +62,38 @@ from app.services.review import ReviewScheduler
 
 api_router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger(__name__)
+
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+_login_attempts_lock = threading.Lock()
+_RATE_LIMIT_WINDOW_SECONDS = 300
+_RATE_LIMIT_MAX_ATTEMPTS = 10
+
+
+@lru_cache(maxsize=1)
+def _admin_email_set() -> frozenset[str]:
+    settings = get_settings()
+    return frozenset(
+        email.strip().lower()
+        for email in settings.admin_email_allowlist.split(",")
+        if email.strip()
+    )
+
+
+def _check_login_rate_limit(email: str) -> None:
+    """Reject after 10 failed-or-attempted logins in a 5-minute window.
+
+    NOTE: In-memory only — resets on restart and does not work across
+    multiple worker processes. Replace with a Redis-backed solution for
+    production multi-worker deployments.
+    """
+    key = email.lower()
+    now = time.monotonic()
+    with _login_attempts_lock:
+        cutoff = now - _RATE_LIMIT_WINDOW_SECONDS
+        _login_attempts[key] = [t for t in _login_attempts[key] if t > cutoff]
+        if len(_login_attempts[key]) >= _RATE_LIMIT_MAX_ATTEMPTS:
+            raise HTTPException(status_code=429, detail="Too many login attempts")
+        _login_attempts[key].append(now)
 
 
 def _set_auth_cookie(response: Response, token: str) -> None:
@@ -136,7 +172,6 @@ def _normalize_topic_for_learner(db: DbSession, learner_id: str, requested_topic
 def signup(payload: SignupRequest, response: Response, db: DbSession = Depends(get_db_session)) -> AuthResponse:
     account_repository = get_account_repository(db)
     auth_service = get_auth_service()
-    settings = get_settings()
     existing = account_repository.get_by_email(payload.email.lower())
     if existing is not None:
         raise HTTPException(status_code=409, detail="Account already exists")
@@ -152,11 +187,7 @@ def signup(payload: SignupRequest, response: Response, db: DbSession = Depends(g
         Account(
             email=payload.email.lower(),
             learner_id=learner.id,
-            is_admin=payload.email.lower() in {
-                email.strip().lower()
-                for email in settings.admin_email_allowlist.split(",")
-                if email.strip()
-            },
+            is_admin=payload.email.lower() in _admin_email_set(),
         ),
         password_hash=auth_service.hash_password(payload.password),
     )
@@ -177,6 +208,7 @@ def signup(payload: SignupRequest, response: Response, db: DbSession = Depends(g
 
 @api_router.post("/auth/login", response_model=AuthResponse)
 def login(payload: LoginRequest, response: Response, db: DbSession = Depends(get_db_session)) -> AuthResponse:
+    _check_login_rate_limit(payload.email)
     account_repository = get_account_repository(db)
     auth_service = get_auth_service()
     result = account_repository.get_by_email(payload.email.lower())

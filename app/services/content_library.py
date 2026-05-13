@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import logging
 from pathlib import Path
 from uuid import uuid5, NAMESPACE_URL
 
 from app.models.domain import ConceptObjective, ContentSnippet
+
+logger = logging.getLogger(__name__)
 
 
 CONTENT_ROOT = Path(__file__).resolve().parents[2] / "content"
@@ -59,6 +62,10 @@ class ContentLibraryService:
             for item in metadata.get("objective_slugs", "").split(",")
             if item.strip()
         ]
+        try:
+            estimated_minutes = int(metadata.get("estimated_minutes", "5"))
+        except (ValueError, TypeError):
+            estimated_minutes = 5
         return ContentSnippet(
             id=snippet_id,
             title=metadata.get("title", document.path.stem),
@@ -69,7 +76,7 @@ class ContentLibraryService:
             source_name=metadata.get("source_name", "Adaptive Tutor Library"),
             summary=metadata.get("summary", document.body.splitlines()[0] if document.body else document.path.stem),
             text=document.body.strip(),
-            estimated_minutes=int(metadata.get("estimated_minutes", "5")),
+            estimated_minutes=estimated_minutes,
         )
 
 
@@ -80,7 +87,10 @@ def _load_content_documents() -> tuple[ParsedContentDocument, ...]:
 
     documents: list[ParsedContentDocument] = []
     for path in sorted(CONTENT_ROOT.glob("*.md")):
-        documents.append(_parse_content_document(path))
+        try:
+            documents.append(_parse_content_document(path))
+        except (ValueError, OSError) as exc:
+            logger.warning("Skipping malformed content file %s: %s", path, exc)
     return tuple(documents)
 
 
@@ -89,7 +99,10 @@ def _parse_content_document(path: Path) -> ParsedContentDocument:
     if not raw.startswith("---\n"):
         raise ValueError(f"Content file {path} is missing frontmatter")
 
-    _, metadata_block, body = raw.split("---\n", 2)
+    parts = raw.split("---\n", 2)
+    if len(parts) < 3:
+        raise ValueError(f"Content file {path} has unclosed frontmatter")
+    _, metadata_block, body = parts
     metadata: dict[str, str] = {}
     for line in metadata_block.strip().splitlines():
         if ":" not in line:

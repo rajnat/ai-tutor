@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import hmac
 
 from fastapi import Cookie, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session as DbSession
@@ -141,7 +142,7 @@ def require_csrf(
     settings = get_settings()
     csrf_cookie = request.cookies.get(settings.csrf_cookie_name)
     csrf_header = request.headers.get(settings.csrf_header_name)
-    if not csrf_cookie or not csrf_header or csrf_cookie != csrf_header:
+    if not csrf_cookie or not csrf_header or not hmac.compare_digest(csrf_cookie, csrf_header):
         raise HTTPException(status_code=403, detail="CSRF validation failed")
     return current_account
 
