@@ -34,12 +34,17 @@ function readCookie(name: string) {
   return cookie ? decodeURIComponent(cookie.split("=", 2)[1] ?? "") : null;
 }
 
-export function setAuthToken(token: string) {
-  void token;
+// Auth is fully cookie-based: the server sets and clears the HttpOnly session
+// cookie in response headers, and the browser sends it automatically via
+// `credentials: "include"`.  These functions exist so call sites in the UI
+// can communicate intent without knowing the transport detail.  If auth is
+// ever migrated to a header-based token these are the only two places to update.
+export function setAuthToken(_token: string) {
+  // No-op: token is already stored in the HttpOnly cookie set by the server.
 }
 
 export function clearAuthSession() {
-  return;
+  // No-op: the server clears the cookie on the logout response.
 }
 
 async function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {

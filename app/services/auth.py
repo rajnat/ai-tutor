@@ -19,9 +19,12 @@ class AuthService:
         return f"{salt.hex()}:{derived.hex()}"
 
     def verify_password(self, password: str, stored_hash: str) -> bool:
-        salt_hex, digest_hex = stored_hash.split(":")
-        salt = bytes.fromhex(salt_hex)
-        expected = bytes.fromhex(digest_hex)
+        try:
+            salt_hex, digest_hex = stored_hash.split(":", 1)
+            salt = bytes.fromhex(salt_hex)
+            expected = bytes.fromhex(digest_hex)
+        except (ValueError, AttributeError):
+            return False
         actual = scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1)
         return hmac.compare_digest(actual, expected)
 

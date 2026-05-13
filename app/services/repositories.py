@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.orm import Session as DbSession, selectinload
 
 from app.models.api import CreateLearnerRequest, CreateSessionRequest
@@ -397,47 +397,56 @@ class SqlLearnerRepository:
         record.learning_style = learner.learning_style.model_dump(mode="json")
         record.created_at = learner.created_at
         record.updated_at = learner.updated_at
-        record.topic_states.clear()
-        self.db.flush()
-        record.topic_states.extend(
-            [
-                LearnerTopicStateRecord(
-                    topic=topic,
-                    mastery=state.mastery,
-                    confidence=state.confidence,
-                    last_practiced_at=state.last_practiced_at,
-                )
-                for topic, state in learner.skills.items()
-            ]
-        )
-        record.objective_states.clear()
-        self.db.flush()
-        record.objective_states.extend(
-            [
-                LearnerObjectiveStateRecord(
-                    objective_id=objective_id,
-                    mastery=state.mastery,
-                    confidence=state.confidence,
-                    last_practiced_at=state.last_practiced_at,
-                )
-                for objective_id, state in learner.objective_states.items()
-            ]
-        )
-        record.misconceptions.clear()
-        self.db.flush()
-        record.misconceptions.extend(
-            [
-                LearnerMisconceptionRecord(
-                    topic=item.topic,
-                    description=item.description,
-                    severity=item.severity,
-                    created_at=item.created_at,
-                )
-                for item in learner.misconceptions
-            ]
-        )
 
-        self.db.add(record)
+        # Bulk-delete all child rows first, then insert the new set in one
+        # commit.  This avoids two failure modes that the old clear()/flush()
+        # pattern had:
+        #
+        # 1. An exception during an intermediate flush left child collections
+        #    partially deleted with no new rows inserted yet.
+        # 2. Re-saving a topic/objective that already exists hit the unique
+        #    constraint because the ORM could INSERT before the DELETE.
+        #
+        # execute(delete()) runs the SQL immediately within the current
+        # transaction, guaranteeing all DELETEs precede any INSERTs.
+        self.db.execute(
+            sa_delete(LearnerTopicStateRecord).where(LearnerTopicStateRecord.learner_id == learner.id)
+        )
+        self.db.execute(
+            sa_delete(LearnerObjectiveStateRecord).where(LearnerObjectiveStateRecord.learner_id == learner.id)
+        )
+        self.db.execute(
+            sa_delete(LearnerMisconceptionRecord).where(LearnerMisconceptionRecord.learner_id == learner.id)
+        )
+        # Expire the cached relationship lists so SQLAlchemy reloads them from
+        # the database instead of serving stale in-memory objects.
+        self.db.expire(record, ["topic_states", "objective_states", "misconceptions"])
+
+        for topic, state in learner.skills.items():
+            self.db.add(LearnerTopicStateRecord(
+                learner_id=learner.id,
+                topic=topic,
+                mastery=state.mastery,
+                confidence=state.confidence,
+                last_practiced_at=state.last_practiced_at,
+            ))
+        for objective_id, state in learner.objective_states.items():
+            self.db.add(LearnerObjectiveStateRecord(
+                learner_id=learner.id,
+                objective_id=objective_id,
+                mastery=state.mastery,
+                confidence=state.confidence,
+                last_practiced_at=state.last_practiced_at,
+            ))
+        for item in learner.misconceptions:
+            self.db.add(LearnerMisconceptionRecord(
+                learner_id=learner.id,
+                topic=item.topic,
+                description=item.description,
+                severity=item.severity,
+                created_at=item.created_at,
+            ))
+
         self.db.commit()
         return self.get(learner.id) or learner
 
