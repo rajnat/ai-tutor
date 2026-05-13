@@ -10,6 +10,7 @@ from app.models.domain import (
     Learner,
     LearningMemoryContext,
     LessonPlan,
+    LessonPlanStep,
     SessionMode,
     TeachingResponse,
     TutorAction,
@@ -33,12 +34,13 @@ class Teacher(Protocol):
         memory_context: LearningMemoryContext | None = None,
         content_snippets: list[ContentSnippet] | None = None,
         lesson_plan: LessonPlan | None = None,
+        active_lesson_step: LessonPlanStep | None = None,
     ) -> TeachingResponse: ...
 
 
 class OpenAITeachingService:
     _RECENT_TURN_LIMIT = 3
-    PROMPT_VERSION = "teaching_v4"
+    PROMPT_VERSION = "teaching_v5"
 
     def __init__(self, llm_provider: LlmProvider) -> None:
         self.llm_provider = llm_provider
@@ -57,6 +59,7 @@ class OpenAITeachingService:
         memory_context: LearningMemoryContext | None = None,
         content_snippets: list[ContentSnippet] | None = None,
         lesson_plan: LessonPlan | None = None,
+        active_lesson_step: LessonPlanStep | None = None,
     ) -> TeachingResponse:
         prompt_inputs = {
             "topic": topic,
@@ -69,6 +72,7 @@ class OpenAITeachingService:
             "memory_summary": memory_context.summary if memory_context is not None else "",
             "content_ids": [snippet.id for snippet in (content_snippets or [])],
             "lesson_plan_id": lesson_plan.id if lesson_plan is not None else None,
+            "active_step_id": active_lesson_step.id if active_lesson_step is not None else None,
         }
         prompt = self._build_prompt(
             learner=learner,
@@ -83,6 +87,7 @@ class OpenAITeachingService:
             memory_context=memory_context,
             content_snippets=content_snippets or [],
             lesson_plan=lesson_plan,
+            active_lesson_step=active_lesson_step,
         )
         instructions = (
             "You are an expert AI tutor inside a course workspace.\n"
@@ -125,6 +130,7 @@ class OpenAITeachingService:
         memory_context: LearningMemoryContext | None,
         content_snippets: list[ContentSnippet],
         lesson_plan: LessonPlan | None,
+        active_lesson_step: LessonPlanStep | None = None,
     ) -> str:
         weak_objective = focus_objective.title if focus_objective is not None else "general understanding"
         weak_objective_description = (
@@ -172,6 +178,7 @@ class OpenAITeachingService:
         memory_text = self._format_memory_context(memory_context)
         content_text = self._format_content_snippets(content_snippets)
         lesson_plan_text = self._format_lesson_plan(lesson_plan)
+        active_step_text = self._format_active_step(active_lesson_step)
 
         action_guidance = {
             TutorAction.EXPLAIN: (
@@ -219,6 +226,7 @@ class OpenAITeachingService:
             f"<recent_turns>\n{recent_turns_text}\n</recent_turns>\n\n"
             f"<teaching_context>\n{exemplars_text}\n</teaching_context>\n\n"
             f"<lesson_plan>\n{lesson_plan_text}\n</lesson_plan>\n\n"
+            f"<active_step>\n{active_step_text}\n</active_step>\n\n"
             f"<retrieved_content>\n{content_text}\n</retrieved_content>\n\n"
             f"<learner_memory>\n{memory_text}\n</learner_memory>\n\n"
             f"<learner_message>\n{learner_message}\n</learner_message>\n\n"
@@ -346,8 +354,42 @@ class OpenAITeachingService:
     def _format_lesson_plan(self, lesson_plan: LessonPlan | None) -> str:
         if lesson_plan is None:
             return "none"
-        steps = "\n".join(
-            f"- {step.step_type}: {step.title} | objective={step.objective_slug or step.objective_id or 'none'} | instruction={step.instruction}"
-            for step in lesson_plan.steps
-        ) or "- none"
-        return f"summary: {lesson_plan.summary}\nsteps:\n{steps}"
+        completed_ids = set(lesson_plan.completed_step_ids)
+        current_index = (
+            min(max(lesson_plan.current_step_index, 0), len(lesson_plan.steps) - 1)
+            if lesson_plan.steps
+            else 0
+        )
+        lines: list[str] = []
+        for i, step in enumerate(lesson_plan.steps):
+            if step.id in completed_ids:
+                marker = "✓"
+                suffix = ""
+            elif i == current_index:
+                marker = "→"
+                suffix = " ← CURRENT"
+            else:
+                marker = "·"
+                suffix = ""
+            lines.append(
+                f"  {marker} [{step.step_type}] {step.title}{suffix}"
+                f" | objective={step.objective_slug or step.objective_id or 'none'}"
+            )
+        completed_count = len(completed_ids)
+        total = len(lesson_plan.steps)
+        return (
+            f"summary: {lesson_plan.summary}\n"
+            f"progress: {completed_count}/{total} steps completed\n"
+            f"steps:\n" + "\n".join(lines)
+        )
+
+    def _format_active_step(self, active_lesson_step: LessonPlanStep | None) -> str:
+        if active_lesson_step is None:
+            return "none"
+        return (
+            f"type: {active_lesson_step.step_type}\n"
+            f"title: {active_lesson_step.title}\n"
+            f"instruction: {active_lesson_step.instruction}\n"
+            f"rationale: {active_lesson_step.rationale}\n"
+            f"objective: {active_lesson_step.objective_slug or active_lesson_step.objective_id or 'none'}"
+        )

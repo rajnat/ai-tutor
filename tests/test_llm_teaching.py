@@ -50,7 +50,7 @@ def test_openai_teaching_service_returns_model_text() -> None:
     assert "notation" in response.text.lower()
     assert response.trace is not None
     assert response.trace.provider == "openai"
-    assert response.trace.prompt_version == "teaching_v3"
+    assert response.trace.prompt_version == "teaching_v5"
 
 
 class RecordingProvider:

@@ -212,6 +212,7 @@ class SessionOrchestrator:
                 memory_context=memory_context,
                 content_snippets=content_snippets,
                 lesson_plan=lesson_plan,
+                active_lesson_step=active_lesson_step,
             )
         except LlmError as error:
             teaching_response = TeachingResponse(

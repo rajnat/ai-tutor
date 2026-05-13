@@ -101,4 +101,5 @@ def test_orchestrator_gracefully_degrades_when_provider_is_unavailable() -> None
 
     assert response.evaluation.reasoning == "Evaluation unavailable because the language model could not be reached."
     assert "temporary issue" in response.tutor_response.lower()
-    assert response.active_lesson_step is not None
+    # No concept → no lesson plan → no active step; this is the correct degraded state.
+    assert response.active_lesson_step is None

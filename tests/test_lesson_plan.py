@@ -24,7 +24,7 @@ class StubPlannerProvider:
     provider_name = "stub"
     model_name = "stub-model"
 
-    def generate_structured(self, prompt: str, schema: type, schema_name: str):
+    def generate_structured(self, prompt: str, schema: type, schema_name: str, instructions: str = ""):
         assert schema_name == "lesson_plan"
         return schema.model_validate(
             {
@@ -102,7 +102,7 @@ def test_lesson_planner_creates_persisted_plan() -> None:
     assert plan.summary == "A simple lesson plan."
     assert len(plan.steps) == 3
     assert plan.trace is not None
-    assert plan.trace.prompt_version == "lesson_plan_v1"
+    assert plan.trace.prompt_version == "lesson_plan_v2"
 
 
 def test_lesson_planner_advances_progress() -> None:
@@ -126,9 +126,10 @@ def test_lesson_planner_advances_progress() -> None:
     )
 
     plan = planner.create_plan(learner, concept, [])
+    # High-correctness response on an objective-focused step should complete it.
     updated = planner.advance_progress(
         plan,
-        action="diagnostic",
+        action="ask_diagnostic",
         correctness=0.8,
         focus_objective_id="obj-1",
         topic_ready_to_advance=False,
@@ -136,3 +137,46 @@ def test_lesson_planner_advances_progress() -> None:
 
     assert len(updated.completed_step_ids) >= 1
     assert updated.current_step_index >= 1
+
+
+def test_lesson_progress_persists_across_sessions() -> None:
+    """Progress saved in one session must be visible when the plan is reloaded."""
+    repository = InMemoryLessonPlanRepository()
+    planner = LessonPlannerService(repository, StubPlannerProvider())
+
+    learner = Learner(name="Eswar", goal="Learn algebra", learning_style=LearningPreferences())
+    concept = Concept(
+        slug="algebra",
+        title="Algebra Foundations",
+        description="Core algebraic manipulation.",
+        subject="math",
+        objectives=[
+            ConceptObjective(
+                id="obj-1",
+                slug="algebra:intuition",
+                title="Conceptual intuition",
+                description="Understand the core idea.",
+            ),
+        ],
+    )
+
+    # Session 1: create plan and advance one step.
+    plan = planner.create_plan(learner, concept, [])
+    assert plan.current_step_index == 0
+
+    planner.advance_progress(
+        plan,
+        action="ask_diagnostic",
+        correctness=0.9,
+        focus_objective_id="obj-1",
+        topic_ready_to_advance=False,
+    )
+
+    # Session 2: reload from the repository — progress must survive.
+    reloaded = planner.get_or_create_plan(learner, concept, [])
+    assert reloaded.current_step_index >= 1, "step index not persisted across sessions"
+    assert len(reloaded.completed_step_ids) >= 1, "completed_step_ids not persisted across sessions"
+
+    # The reloaded plan's current step must not be in completed_step_ids.
+    current_step = reloaded.steps[reloaded.current_step_index]
+    assert current_step.id not in reloaded.completed_step_ids, "current step should not be marked complete"
