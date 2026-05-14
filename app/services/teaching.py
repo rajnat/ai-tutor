@@ -174,6 +174,11 @@ class OpenAITeachingService:
             SessionMode.ASK: "Answer the learner's question directly, then optionally add one clarifying check.",
             SessionMode.TEST: "Behave more like a coach giving a check for understanding than a lecturer.",
             SessionMode.REVIEW: "Prioritize recall, correction, and reconnection to previously weak ideas.",
+            SessionMode.PLACEMENT: (
+                "This is a prerequisite placement check. Ask exactly one focused diagnostic question. "
+                "Do not teach or explain — only assess what the learner already knows. "
+                "Keep your response to one or two sentences."
+            ),
         }[mode]
         pace_guidance = {
             LearningPace.STRUGGLING: (

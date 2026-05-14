@@ -52,6 +52,9 @@ class TutorConfig:
     # Degraded-mode placeholder (LLM unreachable during evaluation)
     degraded_evaluation_confidence: float = 0.2
 
+    # Prerequisite placement quiz
+    placement_max_turns: int = 3  # diagnostic turns before resolving placement
+
     # Adaptive difficulty — misconception and confidence signals
     difficulty_low_confidence_threshold: float = 0.35  # below this, don't ADVANCE
     difficulty_high_misconception_count: int = 2        # at or above this, force REINFORCE

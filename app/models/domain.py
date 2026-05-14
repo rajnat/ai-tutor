@@ -25,6 +25,7 @@ class SessionMode(str, Enum):
     ASK = "ask"
     TEST = "test"
     REVIEW = "review"
+    PLACEMENT = "placement"
 
 
 class ReviewStatus(str, Enum):
@@ -269,6 +270,7 @@ class Session(BaseModel):
     topic: str
     mode: SessionMode = SessionMode.LEARN
     turns: list[TutorTurn] = Field(default_factory=list)
+    placement_topic: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

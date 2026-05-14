@@ -77,7 +77,8 @@ class SessionOrchestrator:
         learner_message: str,
         requested_mode: SessionMode | None,
     ) -> SubmitTurnResponse:
-        if requested_mode is not None:
+        # Never allow an explicit mode change to override an in-progress placement quiz.
+        if requested_mode is not None and session.mode != SessionMode.PLACEMENT:
             session.mode = requested_mode
 
         current_topic = session.topic
@@ -146,6 +147,16 @@ class SessionOrchestrator:
                     correctness=evaluation.correctness,
                     confidence=evaluation.confidence,
                 )
+
+        if session.mode == SessionMode.PLACEMENT:
+            return self._finish_placement_turn(
+                session_id=session_id,
+                session=session,
+                learner_message=learner_message,
+                updated_learner=updated_learner,
+                current_concept=current_concept,
+                evaluation=evaluation,
+            )
 
         topic_misconceptions = [m for m in updated_learner.misconceptions if m.topic == current_topic]
         recent_misconception_count = len(topic_misconceptions[-self.config.difficulty_misconception_window :])
@@ -271,4 +282,86 @@ class SessionOrchestrator:
             active_lesson_step=active_lesson_step,
             updated_learner=LearnerResponse.model_validate(saved_learner),
             updated_session=SessionResponse.model_validate(saved_session),
+        )
+
+    def _finish_placement_turn(
+        self,
+        session_id: str,
+        session: Session,
+        learner_message: str,
+        updated_learner: Learner,
+        current_concept: Concept | None,
+        evaluation: EvaluationResult,
+    ) -> SubmitTurnResponse:
+        prereq_topic = session.topic
+        updated_prereq_state = updated_learner.skills.get(prereq_topic)
+        prereq_mastery = updated_prereq_state.mastery if updated_prereq_state is not None else 0.0
+        prereq_cleared = prereq_mastery >= self.config.prerequisite_mastery_threshold
+
+        # session.turns does not yet include the current turn, so len() is turns completed so far.
+        hit_max = len(session.turns) >= self.config.placement_max_turns - 1
+
+        placement_resolved = prereq_cleared or hit_max
+        placement_passed: bool | None = None
+        action = TutorAction.ASK_DIAGNOSTIC
+
+        if placement_resolved:
+            placement_passed = prereq_cleared
+            original_topic = session.placement_topic or prereq_topic
+            if prereq_cleared:
+                # Learner demonstrated prerequisite knowledge — move to the requested topic.
+                session.topic = original_topic
+            # If not cleared, stay on the prereq topic and switch to LEARN so the tutor
+            # teaches it rather than continuing to assess.
+            session.mode = SessionMode.LEARN
+            session.placement_topic = None
+            action = TutorAction.EXPLAIN
+
+        focus_objective = self.curriculum.weakest_objective(updated_learner, current_concept)
+        try:
+            teaching_response = self.teacher.respond(
+                learner=updated_learner,
+                topic=session.topic,
+                action=action,
+                learner_message=learner_message,
+                mode=SessionMode.PLACEMENT if not placement_resolved else SessionMode.LEARN,
+                current_concept=self.curriculum_repository.get_by_slug(session.topic),
+                focus_objective=focus_objective,
+                recent_turns=session.turns,
+            )
+        except LlmError as error:
+            teaching_response = TeachingResponse(
+                text=(
+                    "I hit a temporary issue. Please try again."
+                ),
+                trace=GenerationTrace(
+                    provider="system",
+                    model="degraded",
+                    prompt_version="teaching_unavailable_v1",
+                    prompt_inputs={"error_type": type(error).__name__, "topic": session.topic},
+                ),
+            )
+
+        session.turns.append(
+            TutorTurn(
+                learner_message=learner_message,
+                tutor_action=action,
+                tutor_response=teaching_response.text,
+                evaluation=evaluation,
+                teaching_trace=teaching_response.trace,
+            )
+        )
+
+        saved_learner = self.learner_repository.save(updated_learner)
+        saved_session = self.session_repository.save(session)
+
+        return SubmitTurnResponse(
+            session_id=session_id,
+            tutor_action=action,
+            tutor_response=teaching_response.text,
+            evaluation=evaluation,
+            active_lesson_step=None,
+            updated_learner=LearnerResponse.model_validate(saved_learner),
+            updated_session=SessionResponse.model_validate(saved_session),
+            placement_passed=placement_passed,
         )

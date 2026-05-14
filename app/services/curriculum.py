@@ -123,6 +123,21 @@ class CurriculumPlanner:
                 return False
         return True
 
+    def find_blocking_prerequisite(
+        self,
+        learner: Learner,
+        concept: Concept,
+        all_concepts: list[Concept],
+    ) -> Concept | None:
+        """Return the first prerequisite concept whose mastery the learner hasn't met."""
+        concept_map = {c.slug: c for c in all_concepts}
+        for prereq_slug in concept.prerequisites:
+            state = learner.skills.get(prereq_slug)
+            mastery = state.mastery if state is not None else 0.0
+            if mastery < self.config.prerequisite_mastery_threshold:
+                return concept_map.get(prereq_slug)
+        return None
+
     def weakest_objective(self, learner: Learner, concept: Concept | None) -> ConceptObjective | None:
         if concept is None or not concept.objectives:
             return None

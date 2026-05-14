@@ -46,6 +46,7 @@ class SessionRecord(Base):
     learner_id: Mapped[str] = mapped_column(String(36), ForeignKey("learners.id"), index=True)
     topic: Mapped[str] = mapped_column(String(255), index=True)
     mode: Mapped[str] = mapped_column(String(32))
+    placement_topic: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now

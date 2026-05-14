@@ -63,7 +63,8 @@ export type Session = {
   id: string;
   learner_id: string;
   topic: string;
-  mode: "learn" | "ask" | "test" | "review";
+  mode: "learn" | "ask" | "test" | "review" | "placement";
+  placement_topic: string | null;
   turns: TutorTurn[];
   created_at: string;
   updated_at: string;
@@ -227,6 +228,7 @@ export type SubmitTurnResponse = {
   active_lesson_step: LessonPlanStep | null;
   updated_learner: Learner;
   updated_session: Session;
+  placement_passed: boolean | null;
 };
 
 export type AuthPayload = {
@@ -238,7 +240,7 @@ export type AuthPayload = {
 export type StudySessionResponse = {
   learner: Learner;
   concept: Concept;
-  lesson_plan: LessonPlan;
+  lesson_plan: LessonPlan | null;
   session: Session;
 };
 

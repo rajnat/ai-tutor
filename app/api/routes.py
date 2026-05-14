@@ -33,7 +33,7 @@ from app.models.api import (
     SubmitTurnResponse,
     StudySessionResponse,
 )
-from app.models.domain import Account, AuthSession, Concept
+from app.models.domain import Account, AuthSession, Concept, SessionMode
 from app.core.config import get_settings
 from app.services.bootstrap import ensure_starter_curriculum
 from app.services.database import get_db_session
@@ -322,11 +322,31 @@ def create_study_session(
         )
     except LlmError as exc:
         raise HTTPException(status_code=502, detail="AI service unavailable — please try again shortly") from exc
-    get_course_workspace_service(db).ensure_course(
-        learner=updated_learner,
-        concept=concept,
-        lesson_plan=lesson_plan,
-    )
+
+    # Check whether the learner meets prerequisites for this concept.
+    all_concepts = get_curriculum_repository(db).list_concepts()
+    blocking = CurriculumPlanner().find_blocking_prerequisite(updated_learner, concept, all_concepts)
+    if blocking is not None:
+        # Redirect to a prerequisite placement quiz before the main lesson.
+        get_lesson_plan_repository(db).supersede_active(updated_learner.id, concept.slug)
+        session.placement_topic = concept.slug
+        session.topic = blocking.slug
+        session.mode = SessionMode.PLACEMENT
+        session = get_session_repository(db).save(session)
+        lesson_plan = None
+        logger.info(
+            "Redirecting study session to placement quiz learner_id=%s blocking_prereq=%s requested_topic=%s",
+            learner_id,
+            blocking.slug,
+            concept.slug,
+        )
+    else:
+        get_course_workspace_service(db).ensure_course(
+            learner=updated_learner,
+            concept=concept,
+            lesson_plan=lesson_plan,
+        )
+
     logger.info(
         "Created study session learner_id=%s topic=%s prompt=%s",
         learner_id,
@@ -336,7 +356,7 @@ def create_study_session(
     return StudySessionResponse(
         learner=LearnerResponse.model_validate(updated_learner),
         concept=ConceptResponse.model_validate(concept),
-        lesson_plan=LessonPlanResponse.model_validate(lesson_plan),
+        lesson_plan=LessonPlanResponse.model_validate(lesson_plan) if lesson_plan is not None else None,
         session=SessionResponse.model_validate(session),
     )
 

@@ -152,6 +152,7 @@ def _session_from_record(record: SessionRecord) -> Session:
         learner_id=record.learner_id,
         topic=record.topic,
         mode=SessionMode(record.mode),
+        placement_topic=record.placement_topic,
         turns=[
             TutorTurn(
                 id=turn.id,
@@ -466,6 +467,7 @@ class SqlSessionRepository:
             learner_id=payload.learner_id,
             topic=payload.topic,
             mode=payload.mode,
+            placement_topic=getattr(payload, "placement_topic", None),
         )
 
         record = SessionRecord(
@@ -473,6 +475,7 @@ class SqlSessionRepository:
             learner_id=session.learner_id,
             topic=session.topic,
             mode=session.mode.value,
+            placement_topic=session.placement_topic,
             created_at=session.created_at,
             updated_at=session.updated_at,
         )
@@ -502,6 +505,7 @@ class SqlSessionRepository:
 
         record.topic = session.topic
         record.mode = session.mode.value
+        record.placement_topic = session.placement_topic
         record.created_at = session.created_at
         record.updated_at = session.updated_at
         record.turns.clear()

@@ -420,11 +420,17 @@ export function LearnerHome() {
                 describeTutorMoment(response.tutor_action)
             }
           ]);
-          setStatus(
-            response.updated_session.topic === currentTopic
-              ? "Nice progress."
-              : `You advanced to ${response.updated_session.topic}.`
-          );
+          if (response.placement_passed === true) {
+            setStatus(`Good — you know ${response.updated_session.placement_topic ?? response.updated_session.topic}. Moving you into the lesson now.`);
+          } else if (response.placement_passed === false) {
+            setStatus(`Let's build your foundation in ${response.updated_session.topic} first.`);
+          } else {
+            setStatus(
+              response.updated_session.topic === currentTopic
+                ? "Nice progress."
+                : `You advanced to ${response.updated_session.topic}.`
+            );
+          }
           await refreshPanels(response.updated_learner, response.updated_session.topic);
           setCheckpointSelections({});
           setCheckpointResults({});
@@ -1035,6 +1041,17 @@ export function LearnerHome() {
                   <span className="status-chip">{Math.round(currentMastery)}% mastery</span>
                 </div>
               </div>
+
+              {session?.mode === "placement" ? (
+                <div className="placement-banner">
+                  <strong>Prerequisite check</strong>
+                  <p className="supporting-text compact-text">
+                    Before starting{session.placement_topic ? ` ${session.placement_topic}` : " your lesson"}, the tutor
+                    will ask a few short questions to confirm you have the background needed. Answer as best you can — this
+                    helps the tutor pitch the lesson at the right level.
+                  </p>
+                </div>
+              ) : null}
 
               <div className="reader-quick-actions">
                 <button

@@ -141,6 +141,7 @@ class SubmitTurnResponse(BaseModel):
     active_lesson_step: LessonPlanStepResponse | None = None
     updated_learner: LearnerResponse
     updated_session: SessionResponse
+    placement_passed: bool | None = None
 
 
 class LessonCheckpointResponse(LessonCheckpoint):
@@ -190,5 +191,5 @@ class ActivateSectionResponse(BaseModel):
 class StudySessionResponse(BaseModel):
     learner: LearnerResponse
     concept: ConceptResponse
-    lesson_plan: LessonPlanResponse
+    lesson_plan: LessonPlanResponse | None
     session: SessionResponse
