@@ -8,6 +8,15 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _as_aware(dt: datetime) -> datetime:
+    """Return dt as a timezone-aware UTC datetime.
+
+    SQLite may return naive datetimes even from DateTime(timezone=True) columns;
+    treat any naive value as UTC so comparisons don't raise TypeError.
+    """
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 class ReviewScheduler:
     def __init__(self, config: TutorConfig = DEFAULT_CONFIG) -> None:
         self.config = config
@@ -86,14 +95,23 @@ class ReviewScheduler:
                 interval_days=interval_days,
             )
 
+        # Always refresh the prompt and objective focus so it tracks the current weak area.
         existing.prompt = prompt
         existing.objective_id = focus_objective.id if focus_objective is not None else None
         existing.objective_slug = focus_objective.slug if focus_objective is not None else None
         existing.expected_answer = expected_answer
-        existing.due_at = due_at
-        existing.status = status
-        existing.interval_days = interval_days
         existing.updated_at = now
+
+        # Only pull the schedule forward if the item is already due/overdue, or the new
+        # due date would be sooner than what's already scheduled.  Never push a future
+        # interval further out: that would stomp the exponential backoff earned via
+        # complete_review and keep reviews perpetually deferred.
+        existing_due_at = _as_aware(existing.due_at)
+        if existing.status == ReviewStatus.DUE or existing_due_at <= now or due_at < existing_due_at:
+            existing.due_at = due_at
+            existing.status = status
+            existing.interval_days = interval_days
+
         return existing
 
     def complete_review(self, review_item: ReviewItem, correctness: float) -> ReviewItem:

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from sqlalchemy import delete as sa_delete, select
+from datetime import UTC, datetime
+
+from sqlalchemy import and_, delete as sa_delete, or_, select
 from sqlalchemy.orm import Session as DbSession, selectinload
 
 from app.models.api import CreateLearnerRequest, CreateSessionRequest
@@ -539,9 +541,19 @@ class SqlReviewRepository:
         self.db = db
 
     def get_due_reviews(self, learner_id: str) -> list[ReviewItem]:
+        now = datetime.now(UTC)
         records = self.db.execute(
             select(ReviewItemRecord)
-            .where(ReviewItemRecord.learner_id == learner_id, ReviewItemRecord.status == ReviewStatus.DUE.value)
+            .where(
+                ReviewItemRecord.learner_id == learner_id,
+                or_(
+                    ReviewItemRecord.status == ReviewStatus.DUE.value,
+                    and_(
+                        ReviewItemRecord.status == ReviewStatus.SCHEDULED.value,
+                        ReviewItemRecord.due_at <= now,
+                    ),
+                ),
+            )
             .order_by(ReviewItemRecord.due_at.asc())
         ).scalars()
         return [_review_from_record(record) for record in records]
