@@ -5,6 +5,7 @@ from app.models.domain import (
     EvaluationResult,
     GenerationTrace,
     Learner,
+    LearningPace,
     LessonPlan,
     LessonPlanStep,
     Session,
@@ -146,11 +147,20 @@ class SessionOrchestrator:
                     confidence=evaluation.confidence,
                 )
 
+        topic_misconceptions = [m for m in updated_learner.misconceptions if m.topic == current_topic]
+        recent_misconception_count = len(topic_misconceptions[-self.config.difficulty_misconception_window :])
+        learning_pace = self.curriculum.assess_learning_pace(
+            recent_turns=session.turns,
+            mastery=topic_state.mastery,
+        )
         action = self.curriculum.choose_action(
             topic=current_topic,
             mastery=topic_state.mastery,
             mode=session.mode,
             misconception_detected=evaluation.misconception_detected,
+            confidence=topic_state.confidence,
+            recent_misconception_count=recent_misconception_count,
+            learning_pace=learning_pace,
         )
         if action == TutorAction.ADVANCE and not self.curriculum.concept_ready_to_advance(
             updated_learner, current_concept
@@ -213,6 +223,7 @@ class SessionOrchestrator:
                 content_snippets=content_snippets,
                 lesson_plan=lesson_plan,
                 active_lesson_step=active_lesson_step,
+                learning_pace=learning_pace,
             )
         except LlmError as error:
             teaching_response = TeachingResponse(

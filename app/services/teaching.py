@@ -9,6 +9,7 @@ from app.models.domain import (
     GenerationTrace,
     Learner,
     LearningMemoryContext,
+    LearningPace,
     LessonPlan,
     LessonPlanStep,
     SessionMode,
@@ -35,12 +36,13 @@ class Teacher(Protocol):
         content_snippets: list[ContentSnippet] | None = None,
         lesson_plan: LessonPlan | None = None,
         active_lesson_step: LessonPlanStep | None = None,
+        learning_pace: LearningPace | None = None,
     ) -> TeachingResponse: ...
 
 
 class OpenAITeachingService:
     _RECENT_TURN_LIMIT = 3
-    PROMPT_VERSION = "teaching_v5"
+    PROMPT_VERSION = "teaching_v6"
 
     def __init__(self, llm_provider: LlmProvider) -> None:
         self.llm_provider = llm_provider
@@ -60,6 +62,7 @@ class OpenAITeachingService:
         content_snippets: list[ContentSnippet] | None = None,
         lesson_plan: LessonPlan | None = None,
         active_lesson_step: LessonPlanStep | None = None,
+        learning_pace: LearningPace | None = None,
     ) -> TeachingResponse:
         prompt_inputs = {
             "topic": topic,
@@ -88,6 +91,7 @@ class OpenAITeachingService:
             content_snippets=content_snippets or [],
             lesson_plan=lesson_plan,
             active_lesson_step=active_lesson_step,
+            learning_pace=learning_pace,
         )
         instructions = (
             "You are an expert AI tutor inside a course workspace.\n"
@@ -131,6 +135,7 @@ class OpenAITeachingService:
         content_snippets: list[ContentSnippet],
         lesson_plan: LessonPlan | None,
         active_lesson_step: LessonPlanStep | None = None,
+        learning_pace: LearningPace | None = None,
     ) -> str:
         weak_objective = focus_objective.title if focus_objective is not None else "general understanding"
         weak_objective_description = (
@@ -170,6 +175,17 @@ class OpenAITeachingService:
             SessionMode.TEST: "Behave more like a coach giving a check for understanding than a lecturer.",
             SessionMode.REVIEW: "Prioritize recall, correction, and reconnection to previously weak ideas.",
         }[mode]
+        pace_guidance = {
+            LearningPace.STRUGGLING: (
+                "The learner is struggling to keep up. Use simpler language, break ideas into smaller steps, "
+                "and lean on concrete examples before any comprehension check."
+            ),
+            LearningPace.ACCELERATING: (
+                "The learner is progressing faster than expected. Move briskly, introduce nuance or depth, "
+                "and skip excessive scaffolding."
+            ),
+            LearningPace.NORMAL: None,
+        }[learning_pace or LearningPace.NORMAL]
         exemplars_text = self._build_exemplars(
             topic=topic,
             current_concept=current_concept,
@@ -220,7 +236,8 @@ class OpenAITeachingService:
             f"style_guidance: {style_guidance}\n"
             f"verbosity_guidance: {verbosity_guidance}\n"
             f"mode_guidance: {mode_guidance}\n"
-            f"prefers_examples: {learner.learning_style.prefers_examples}\n"
+            + (f"pace_guidance: {pace_guidance}\n" if pace_guidance else "")
+            + f"prefers_examples: {learner.learning_style.prefers_examples}\n"
             f"</pedagogy>\n\n"
             f"<session_summary>\n{older_turns_summary}\n</session_summary>\n\n"
             f"<recent_turns>\n{recent_turns_text}\n</recent_turns>\n\n"

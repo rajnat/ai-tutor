@@ -32,6 +32,12 @@ class ReviewStatus(str, Enum):
     SCHEDULED = "scheduled"
 
 
+class LearningPace(str, Enum):
+    STRUGGLING = "struggling"
+    NORMAL = "normal"
+    ACCELERATING = "accelerating"
+
+
 class AuthSessionStatus(str, Enum):
     ACTIVE = "active"
     REVOKED = "revoked"

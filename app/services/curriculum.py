@@ -1,4 +1,4 @@
-from app.models.domain import Concept, ConceptObjective, Learner, SessionMode, TutorAction
+from app.models.domain import Concept, ConceptObjective, Learner, LearningPace, SessionMode, TutorAction, TutorTurn
 from app.services.tutor_config import DEFAULT_CONFIG, TutorConfig
 
 
@@ -6,22 +6,79 @@ class CurriculumPlanner:
     def __init__(self, config: TutorConfig = DEFAULT_CONFIG) -> None:
         self.config = config
 
+    def assess_learning_pace(
+        self,
+        recent_turns: list[TutorTurn],
+        mastery: float,
+    ) -> LearningPace:
+        """Classify how fast the learner is progressing right now.
+
+        Uses a rolling correctness average plus a "stuck at novice" guard for
+        learners who have had many turns without mastery movement.
+        """
+        cfg = self.config
+        window = recent_turns[-cfg.pace_recent_turns_window :]
+        if not window:
+            return LearningPace.NORMAL
+
+        avg_correctness = sum(t.evaluation.correctness for t in window) / len(window)
+
+        if len(recent_turns) >= cfg.pace_struggling_turns_minimum and mastery < cfg.mastery_novice_threshold:
+            return LearningPace.STRUGGLING
+        if avg_correctness < cfg.pace_struggling_avg_correctness:
+            return LearningPace.STRUGGLING
+        if avg_correctness >= cfg.pace_accelerating_avg_correctness:
+            return LearningPace.ACCELERATING
+        return LearningPace.NORMAL
+
     def choose_action(
         self,
         topic: str,
         mastery: float,
         mode: SessionMode,
         misconception_detected: bool,
+        confidence: float = 0.5,
+        recent_misconception_count: int = 0,
+        learning_pace: LearningPace = LearningPace.NORMAL,
     ) -> TutorAction:
+        cfg = self.config
+
+        # Session mode overrides everything.
         if mode == SessionMode.TEST:
             return TutorAction.ASK_PRACTICE
         if mode == SessionMode.REVIEW or misconception_detected:
             return TutorAction.REINFORCE
-        if mastery < self.config.mastery_novice_threshold:
-            return TutorAction.EXPLAIN
-        if mastery < self.config.mastery_intermediate_threshold:
-            return TutorAction.ASK_DIAGNOSTIC
-        return TutorAction.ADVANCE
+
+        # Accumulated misconceptions on this topic signal persistent confusion —
+        # one REINFORCE turn is not enough; keep correcting.
+        if recent_misconception_count >= cfg.difficulty_high_misconception_count:
+            return TutorAction.REINFORCE
+
+        # Base action from mastery level.
+        if mastery < cfg.mastery_novice_threshold:
+            action = TutorAction.EXPLAIN
+        elif mastery < cfg.mastery_intermediate_threshold:
+            action = TutorAction.ASK_DIAGNOSTIC
+        else:
+            action = TutorAction.ADVANCE
+
+        # Confidence gate: mastery may be high from lucky guesses; don't advance
+        # until the learner can also answer reliably.
+        if action == TutorAction.ADVANCE and confidence < cfg.difficulty_low_confidence_threshold:
+            action = TutorAction.ASK_DIAGNOSTIC
+
+        # Learning pace adjustments: demote one level when struggling so the
+        # learner gets more scaffolding; promote EXPLAIN → ASK_DIAGNOSTIC when
+        # accelerating so we don't waste time on content the learner has grasped.
+        if learning_pace == LearningPace.STRUGGLING:
+            if action == TutorAction.ADVANCE:
+                action = TutorAction.ASK_DIAGNOSTIC
+            elif action == TutorAction.ASK_DIAGNOSTIC:
+                action = TutorAction.EXPLAIN
+        elif learning_pace == LearningPace.ACCELERATING and action == TutorAction.EXPLAIN:
+            action = TutorAction.ASK_DIAGNOSTIC
+
+        return action
 
     def suggest_next_topic(self, learner: Learner, concepts: list[Concept]) -> list[Concept]:
         if not concepts:

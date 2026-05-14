@@ -52,5 +52,16 @@ class TutorConfig:
     # Degraded-mode placeholder (LLM unreachable during evaluation)
     degraded_evaluation_confidence: float = 0.2
 
+    # Adaptive difficulty — misconception and confidence signals
+    difficulty_low_confidence_threshold: float = 0.35  # below this, don't ADVANCE
+    difficulty_high_misconception_count: int = 2        # at or above this, force REINFORCE
+    difficulty_misconception_window: int = 5            # how many recent topic misconceptions to inspect
+
+    # Learning pace assessment
+    pace_recent_turns_window: int = 4            # rolling window for avg correctness
+    pace_struggling_avg_correctness: float = 0.4  # rolling avg below this → STRUGGLING
+    pace_accelerating_avg_correctness: float = 0.75  # rolling avg at or above this → ACCELERATING
+    pace_struggling_turns_minimum: int = 5        # turns needed before declaring "stuck at novice"
+
 
 DEFAULT_CONFIG = TutorConfig()
