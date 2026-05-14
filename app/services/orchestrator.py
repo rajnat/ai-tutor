@@ -185,7 +185,7 @@ class SessionOrchestrator:
             if next_concept is not None:
                 session.topic = next_concept.slug
 
-        if lesson_plan is not None and evaluation_available:
+        if lesson_plan is not None:
             lesson_plan = self.lesson_planner.advance_progress(
                 lesson_plan,
                 action=action.value,
