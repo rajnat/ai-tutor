@@ -153,9 +153,10 @@ class OpenAITeachingService:
             if next_concept is not None
             else "none"
         )
+        topic_misconceptions = [m for m in learner.misconceptions if m.topic == topic]
         misconceptions = (
-            ", ".join(misconception.description for misconception in learner.misconceptions[-3:])
-            if learner.misconceptions
+            ", ".join(m.description for m in topic_misconceptions[-3:])
+            if topic_misconceptions
             else "none"
         )
         recent_turns_text = self._format_recent_turns(detailed_recent_turns)

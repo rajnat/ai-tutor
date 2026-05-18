@@ -55,6 +55,12 @@ class TutorConfig:
     # Prerequisite placement quiz
     placement_max_turns: int = 3  # diagnostic turns before resolving placement
 
+    # Misconception lifecycle
+    misconception_max_per_topic: int = 5               # hard cap; oldest dropped when exceeded
+    misconception_resolution_correctness: float = 0.82 # correctness required to resolve one misconception
+    misconception_resolution_confidence: float = 0.55  # minimum confidence to trigger resolution
+    misconception_dedup_similarity: float = 0.45       # Jaccard threshold for near-duplicate detection
+
     # Adaptive difficulty — misconception and confidence signals
     difficulty_low_confidence_threshold: float = 0.35  # below this, don't ADVANCE
     difficulty_high_misconception_count: int = 2        # at or above this, force REINFORCE
