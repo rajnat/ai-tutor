@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
-from app.models.domain import Concept, ContentSnippet, GenerationTrace, Learner, LessonPlan, LessonPlanStep
+from app.models.domain import Concept, ConceptObjective, ContentSnippet, GenerationTrace, Learner, LessonPlan, LessonPlanStep
 from app.services.llm import LlmProvider
 from app.services.repositories import LessonPlanRepository
 from app.services.tutor_config import DEFAULT_CONFIG, TutorConfig
@@ -25,7 +25,7 @@ class LessonPlanPayload(BaseModel):
 
 
 class LessonPlannerService:
-    PROMPT_VERSION = "lesson_plan_v2"
+    PROMPT_VERSION = "lesson_plan_v3"
 
     def __init__(
         self,
@@ -54,54 +54,20 @@ class LessonPlannerService:
         concept: Concept,
         content_snippets: list[ContentSnippet],
     ) -> LessonPlan:
-        snippet_summaries = "\n".join(
-            f"- {snippet.title}: {snippet.summary}" for snippet in content_snippets[:3]
-        ) or "- none"
-        objective_lines = "\n".join(
-            f"- id={objective.id} | slug={objective.slug} | title={objective.title} | description={objective.description}"
-            for objective in concept.objectives
-        ) or "- none"
-
         prompt_inputs = {
             "learner_id": learner.id,
             "topic": concept.slug,
             "objective_ids": [objective.id for objective in concept.objectives],
             "content_ids": [snippet.id for snippet in content_snippets],
         }
-        prompt = (
-            "<task>\n"
-            "Design a compact lesson sequence for a single tutoring session.\n"
-            "The plan should feel like a teachable mini-course, not a generic outline.\n"
-            "</task>\n\n"
-            f"<learner>\n"
-            f"goal: {learner.goal}\n"
-            f"teaching_style: {learner.learning_style.teaching_style}\n"
-            f"verbosity: {learner.learning_style.verbosity}\n"
-            f"prefers_examples: {learner.learning_style.prefers_examples}\n"
-            f"</learner>\n\n"
-            f"<concept>\n"
-            f"slug: {concept.slug}\n"
-            f"title: {concept.title}\n"
-            f"description: {concept.description}\n"
-            f"</concept>\n\n"
-            f"<objectives>\n{objective_lines}\n</objectives>\n\n"
-            f"<available_content>\n{snippet_summaries}\n</available_content>\n\n"
-            "<requirements>\n"
-            "- Use 3 to 6 steps.\n"
-            "- Begin with intuition or framing before heavy practice.\n"
-            "- Include at least one diagnostic or comprehension check.\n"
-            "- Include at least one practice-oriented step.\n"
-            "- End with a transition, synthesis, or next-step move.\n"
-            "- Step titles should read naturally in a course sidebar.\n"
-            "- Instructions should tell the tutor exactly what to do in that step.\n"
-            "- Rationales should explain why that step exists pedagogically.\n"
-            "</requirements>"
-        )
+        prompt = self._build_prompt(learner, concept, content_snippets)
         instructions = (
             "You are an expert instructional designer for adaptive tutoring.\n"
             "Return only JSON matching the schema.\n"
             "Prefer coherent instructional sequencing over broad topic coverage.\n"
-            "Do not produce abstract syllabus language."
+            "Do not produce abstract syllabus language.\n"
+            "Use the learner's current mastery state to personalize the plan — "
+            "do not treat every learner as a blank slate."
         )
 
         payload = self.llm_provider.generate_structured(
@@ -135,6 +101,107 @@ class LessonPlannerService:
         )
         self.lesson_plan_repository.supersede_active(learner.id, concept.slug)
         return self.lesson_plan_repository.save(lesson_plan)
+
+    def _build_prompt(
+        self,
+        learner: Learner,
+        concept: Concept,
+        content_snippets: list[ContentSnippet],
+    ) -> str:
+        topic_state = learner.skills.get(concept.slug)
+        topic_mastery = topic_state.mastery if topic_state is not None else 0.0
+
+        mastered: list[str] = []
+        learning: list[str] = []
+        unstarted: list[str] = []
+
+        objective_lines: list[str] = []
+        for obj in concept.objectives:
+            obj_state = learner.objective_states.get(obj.id)
+            obj_mastery = obj_state.mastery if obj_state is not None else 0.0
+            status = _objective_status(obj_mastery, obj.mastery_threshold)
+            objective_lines.append(
+                f"- id={obj.id} | slug={obj.slug} | title={obj.title}"
+                f" | mastery={obj_mastery:.2f}/{obj.mastery_threshold:.2f} ({status})"
+                f" | description={obj.description}"
+            )
+            if status == "MASTERED":
+                mastered.append(f"{obj.title} ({obj_mastery:.2f}/{obj.mastery_threshold:.2f})")
+            elif status == "LEARNING":
+                learning.append(f"{obj.title} ({obj_mastery:.2f}/{obj.mastery_threshold:.2f})")
+            else:
+                unstarted.append(f"{obj.title} ({obj_mastery:.2f}/{obj.mastery_threshold:.2f})")
+
+        objectives_block = "\n".join(objective_lines) or "- none"
+
+        mastered_lines = "\n".join(f"    - {x}" for x in mastered) or "    - none"
+        learning_lines = "\n".join(f"    - {x}" for x in learning) or "    - none"
+        unstarted_lines = "\n".join(f"    - {x}" for x in unstarted) or "    - none"
+
+        topic_mastery_label = _topic_mastery_label(topic_mastery)
+        learner_state_block = (
+            f"<learner_state>\n"
+            f"topic_mastery: {topic_mastery:.2f} ({topic_mastery_label})\n"
+            f"objective_status:\n"
+            f"  MASTERED — omit or use one brief diagnostic only:\n{mastered_lines}\n"
+            f"  LEARNING — needs continued work, allocate steps here:\n{learning_lines}\n"
+            f"  UNSTARTED — needs full introduction:\n{unstarted_lines}\n"
+            f"</learner_state>\n"
+        )
+
+        snippet_summaries = "\n".join(
+            f"- {snippet.title}: {snippet.summary}" for snippet in content_snippets[:3]
+        ) or "- none"
+
+        # Build personalized starting-point guidance based on actual state.
+        if all(m == 0.0 for m in [
+            (learner.objective_states.get(o.id).mastery if learner.objective_states.get(o.id) else 0.0)
+            for o in concept.objectives
+        ]):
+            starting_point = "All objectives are UNSTARTED — begin with framing and intuition before any assessment."
+        elif mastered and not learning and not unstarted:
+            starting_point = "All objectives are MASTERED — plan should be a brief synthesis or bridge to the next concept."
+        elif mastered:
+            starting_point = (
+                f"The learner has partial knowledge. Skip basics for MASTERED objectives. "
+                f"Start from the learner's current gap: focus steps on LEARNING and UNSTARTED objectives."
+            )
+        else:
+            starting_point = "The learner is working through these objectives — start from their current level, not from scratch."
+
+        return (
+            "<task>\n"
+            "Design a compact lesson sequence for a single tutoring session.\n"
+            "The plan must be personalized to where this learner currently is — not a generic outline.\n"
+            "</task>\n\n"
+            f"<learner>\n"
+            f"goal: {learner.goal}\n"
+            f"teaching_style: {learner.learning_style.teaching_style}\n"
+            f"verbosity: {learner.learning_style.verbosity}\n"
+            f"prefers_examples: {learner.learning_style.prefers_examples}\n"
+            f"</learner>\n\n"
+            f"{learner_state_block}\n"
+            f"<concept>\n"
+            f"slug: {concept.slug}\n"
+            f"title: {concept.title}\n"
+            f"description: {concept.description}\n"
+            f"</concept>\n\n"
+            f"<objectives>\n{objectives_block}\n</objectives>\n\n"
+            f"<available_content>\n{snippet_summaries}\n</available_content>\n\n"
+            "<requirements>\n"
+            f"- Starting point: {starting_point}\n"
+            "- Use 3 to 6 steps.\n"
+            "- MASTERED objectives: omit full explain steps — at most one brief diagnostic to confirm.\n"
+            "- LEARNING objectives: include explain + diagnostic or practice steps.\n"
+            "- UNSTARTED objectives: include a proper introductory step before any assessment.\n"
+            "- Weight the plan toward the objectives with the lowest mastery.\n"
+            "- Include at least one practice-oriented step for any objective that is not MASTERED.\n"
+            "- End with a transition, synthesis, or next-step move.\n"
+            "- Step titles should read naturally in a course sidebar.\n"
+            "- Instructions should tell the tutor exactly what to do in that step.\n"
+            "- Rationales should explain why that step exists pedagogically.\n"
+            "</requirements>"
+        )
 
     def advance_progress(
         self,
@@ -175,3 +242,21 @@ class LessonPlannerService:
         lesson_plan.current_step_index = min(current_index, len(lesson_plan.steps) - 1)
         lesson_plan.updated_at = datetime.now(UTC)
         return self.lesson_plan_repository.save(lesson_plan)
+
+
+def _objective_status(mastery: float, threshold: float) -> str:
+    if mastery >= threshold:
+        return "MASTERED"
+    if mastery > 0.1:
+        return "LEARNING"
+    return "UNSTARTED"
+
+
+def _topic_mastery_label(mastery: float) -> str:
+    if mastery >= 0.8:
+        return "strong"
+    if mastery >= 0.5:
+        return "developing"
+    if mastery >= 0.2:
+        return "early"
+    return "none yet"

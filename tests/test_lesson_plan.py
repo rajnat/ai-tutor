@@ -102,7 +102,7 @@ def test_lesson_planner_creates_persisted_plan() -> None:
     assert plan.summary == "A simple lesson plan."
     assert len(plan.steps) == 3
     assert plan.trace is not None
-    assert plan.trace.prompt_version == "lesson_plan_v2"
+    assert plan.trace.prompt_version == "lesson_plan_v3"
 
 
 def test_lesson_planner_advances_progress() -> None:

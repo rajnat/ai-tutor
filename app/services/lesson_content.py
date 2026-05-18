@@ -40,8 +40,32 @@ class LessonContentPayload(BaseModel):
     blocks: list[LessonContentBlockPayload] = Field(min_length=4, max_length=8)
 
 
+def _objective_status(mastery: float, threshold: float) -> str:
+    if mastery >= threshold:
+        return "MASTERED"
+    if mastery > 0.1:
+        return "LEARNING"
+    return "UNSTARTED"
+
+
+def _depth_guidance(mastery: float, threshold: float) -> str:
+    if mastery >= threshold:
+        return "The learner has mastered this objective — use a concise review framing, skip basics."
+    if mastery > 0.1:
+        return "The learner has partial understanding — build on what they know, address the remaining gap."
+    return "The learner is new to this objective — introduce from first principles with concrete examples."
+
+
+def _checkpoint_guidance(mastery: float, threshold: float) -> str:
+    if mastery >= threshold:
+        return "Ask a nuanced question that probes deeper understanding or edge cases."
+    if mastery > 0.1:
+        return "Ask an intermediate question that tests whether the core concept is solid."
+    return "Ask a foundational question that reveals whether the learner grasped the basic idea."
+
+
 class LessonContentService:
-    PROMPT_VERSION = "lesson_content_v3"
+    PROMPT_VERSION = "lesson_content_v4"
 
     def __init__(self, llm_provider: LlmProvider) -> None:
         self.llm_provider = llm_provider
@@ -111,14 +135,46 @@ class LessonContentService:
         prior_wrong_answer: str | None = None,
         prior_checkpoint_explanation: str | None = None,
     ) -> str:
-        objectives = "\n".join(
-            f"- id={objective.id} | slug={objective.slug} | title={objective.title} | description={objective.description}"
-            for objective in concept.objectives
-        ) or "- none"
         steps = "\n".join(f"- {step.title}: {step.instruction}" for step in lesson_plan.steps) or "- none"
         recent = "\n".join(f"- {message}" for message in recent_messages[-3:]) or "- none"
 
-        # Surface the learner's topic-specific misconceptions so the MCQ can target them.
+        # Objectives with inline mastery state.
+        objective_lines: list[str] = []
+        for obj in concept.objectives:
+            obj_state = learner.objective_states.get(obj.id)
+            obj_mastery = obj_state.mastery if obj_state is not None else 0.0
+            status = _objective_status(obj_mastery, obj.mastery_threshold)
+            objective_lines.append(
+                f"- id={obj.id} | slug={obj.slug} | title={obj.title}"
+                f" | mastery={obj_mastery:.2f}/{obj.mastery_threshold:.2f} ({status})"
+                f" | description={obj.description}"
+            )
+        objectives_block = "\n".join(objective_lines) or "- none"
+
+        # Active step's objective — the primary focus of this section.
+        active_obj_id = active_step.objective_id if active_step is not None else None
+        active_obj = next(
+            (obj for obj in concept.objectives if obj.id == active_obj_id),
+            None,
+        ) if active_obj_id else None
+        if active_obj is not None:
+            active_obj_state = learner.objective_states.get(active_obj.id)
+            active_obj_mastery = active_obj_state.mastery if active_obj_state is not None else 0.0
+            active_obj_status = _objective_status(active_obj_mastery, active_obj.mastery_threshold)
+            active_obj_block = (
+                f"<active_objective>\n"
+                f"title: {active_obj.title}\n"
+                f"mastery: {active_obj_mastery:.2f} / threshold {active_obj.mastery_threshold:.2f} ({active_obj_status})\n"
+                f"</active_objective>\n"
+            )
+            depth_guidance = _depth_guidance(active_obj_mastery, active_obj.mastery_threshold)
+            checkpoint_guidance = _checkpoint_guidance(active_obj_mastery, active_obj.mastery_threshold)
+        else:
+            active_obj_block = ""
+            depth_guidance = "Introduce the concept from first principles."
+            checkpoint_guidance = "Ask a foundational question that reveals basic understanding."
+
+        # Topic-specific misconceptions for distractor targeting.
         topic_misconceptions: list[Misconception] = [
             m for m in learner.misconceptions if m.topic == concept.slug
         ]
@@ -145,7 +201,7 @@ class LessonContentService:
 
         mcq_guidance = (
             "MCQ checkpoint requirements:\n"
-            "- The question must test conceptual understanding, not recall of a definition.\n"
+            f"- {checkpoint_guidance}\n"
             "- Each distractor must represent a specific named misconception, not just a wrong value.\n"
             "- The explanation must address why the correct answer is right AND why each distractor fails.\n"
         )
@@ -160,6 +216,7 @@ class LessonContentService:
             "<task>\n"
             "Create one structured course section for a learner-facing lesson workspace.\n"
             "The output should read like polished educational content, not chat dialogue.\n"
+            "Calibrate depth, example complexity, and checkpoint difficulty to the learner's current mastery.\n"
             f"{'This is a remediation pass — the learner got the previous checkpoint wrong.' if prior_wrong_answer else ''}\n"
             "</task>\n\n"
             f"<learner>\n"
@@ -177,13 +234,15 @@ class LessonContentService:
             f"title: {active_step.title if active_step is not None else 'Start lesson'}\n"
             f"instruction: {active_step.instruction if active_step is not None else 'Introduce the topic'}\n"
             f"</active_step>\n\n"
-            f"<objectives>\n{objectives}\n</objectives>\n\n"
+            f"{active_obj_block}"
+            f"<objectives>\n{objectives_block}\n</objectives>\n\n"
             f"<lesson_steps>\n{steps}\n</lesson_steps>\n\n"
             f"<recent_context>\n{recent}\n</recent_context>\n"
             f"{remediation_block}\n"
             "<requirements>\n"
             "- Use 4 to 8 blocks.\n"
             "- Include exactly one checkpoint_mcq block.\n"
+            f"- Content depth: {depth_guidance}\n"
             "- Start with a strong conceptual opening before the checkpoint.\n"
             "- Use prose that would look good in a course reader.\n"
             "- The example should make the concept more concrete, not repeat the definition.\n"
