@@ -84,12 +84,14 @@ class SessionOrchestrator:
         current_topic = session.topic
         current_concept = self.curriculum_repository.get_by_slug(current_topic)
         topic_state = self.learner_model.ensure_topic(learner, current_topic)
+        last_tutor_message = session.turns[-1].tutor_response if session.turns else None
         evaluation_available = True
         try:
             evaluation = self.evaluator.evaluate(
                 learner_message=learner_message,
                 topic=current_topic,
                 objectives=current_concept.objectives if current_concept is not None else None,
+                last_tutor_message=last_tutor_message,
             )
         except LlmError as error:
             evaluation_available = False

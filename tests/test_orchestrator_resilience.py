@@ -53,7 +53,7 @@ class FakeLessonPlanner:
 
 
 class UnavailableEvaluator:
-    def evaluate(self, learner_message: str, topic: str, objectives=None):
+    def evaluate(self, learner_message: str, topic: str, objectives=None, last_tutor_message=None):
         raise LlmUnavailableError("provider down")
 
 

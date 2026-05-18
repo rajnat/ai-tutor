@@ -14,6 +14,7 @@ class Evaluator(Protocol):
         learner_message: str,
         topic: str,
         objectives: list[ConceptObjective] | None = None,
+        last_tutor_message: str | None = None,
     ) -> EvaluationResult: ...
 
 
@@ -27,7 +28,7 @@ class LlmEvaluationPayload(BaseModel):
 
 
 class OpenAIEvaluationService:
-    PROMPT_VERSION = "evaluation_v3"
+    PROMPT_VERSION = "evaluation_v4"
 
     def __init__(self, llm_provider: LlmProvider) -> None:
         self.llm_provider = llm_provider
@@ -37,6 +38,7 @@ class OpenAIEvaluationService:
         learner_message: str,
         topic: str,
         objectives: list[ConceptObjective] | None = None,
+        last_tutor_message: str | None = None,
     ) -> EvaluationResult:
         objectives = objectives or []
         objective_lines = "\n".join(
@@ -48,14 +50,24 @@ class OpenAIEvaluationService:
             "topic": topic,
             "objective_ids": [objective.id for objective in objectives],
             "learner_message": learner_message,
+            "has_tutor_context": last_tutor_message is not None,
         }
+
+        tutor_context_block = (
+            f"<tutor_question>\n{last_tutor_message}\n</tutor_question>\n\n"
+            if last_tutor_message is not None
+            else "<tutor_question>\nnone — this is the first turn\n</tutor_question>\n\n"
+        )
+
         prompt = (
             "<task>\n"
             "Evaluate a learner response for tutoring state updates.\n"
             "Judge demonstrated understanding, not writing quality, confidence theater, or politeness.\n"
+            "The tutor's question is provided so you can interpret the learner's response in context.\n"
             "</task>\n\n"
             f"<topic>\n{topic}\n</topic>\n\n"
             f"<objectives>\n{objective_lines}\n</objectives>\n\n"
+            f"{tutor_context_block}"
             f"<learner_response>\n{learner_message}\n</learner_response>\n\n"
             "<scoring_rubric>\n"
             "correctness:\n"
@@ -63,18 +75,23 @@ class OpenAIEvaluationService:
             "- 0.3 to 0.5 = partial but shaky understanding\n"
             "- 0.6 to 0.8 = mostly correct with useful understanding\n"
             "- 0.9 to 1.0 = clearly correct and well grounded\n"
+            "- If the learner is asking a question rather than answering one, score 0.5 and set misconception_detected=false.\n"
+            "- If the learner's response is a clarification, acknowledgement, or meta-comment not tied to a specific concept, score 0.5.\n"
             "confidence:\n"
-            "- Estimate how confidently the learner seems to understand the idea, not their tone alone.\n"
+            "- Estimate how confidently the learner seems to understand the idea based on what they said, not their hedging language alone.\n"
+            "- A learner who gives a correct but tentative answer should still get moderate-to-high confidence.\n"
             "objective_id:\n"
-            "- Pick the one objective most evidenced by the response.\n"
-            "- Return null if the response is too broad or no objective clearly matches.\n"
+            "- Pick the one objective most evidenced by the response relative to what the tutor asked.\n"
+            "- Return null if the response is a question, acknowledgement, or too vague to map.\n"
             "misconception_detected:\n"
             "- True only when the response reveals a specific conceptual misunderstanding, not just incompleteness.\n"
+            "- Do not flag as misconception when the learner is asking for clarification.\n"
             "</scoring_rubric>"
         )
         instructions = (
             "You are a strict but fair tutoring evaluator.\n"
             "Return only JSON matching the schema.\n"
+            "Use the tutor's question to interpret what the learner was responding to.\n"
             "Be calibrated rather than generous.\n"
             "Use the provided objectives as the only valid source for objective_id.\n"
             "Keep reasoning short and diagnostic."

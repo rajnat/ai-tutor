@@ -49,6 +49,7 @@ def test_openai_provider_parses_structured_evaluation() -> None:
                 description="Use algebraic symbols correctly.",
             )
         ],
+        last_tutor_message="What do algebraic symbols represent?",
     )
 
     assert result.correctness == 0.82
@@ -57,4 +58,4 @@ def test_openai_provider_parses_structured_evaluation() -> None:
     assert result.misconception_detected is False
     assert result.trace is not None
     assert result.trace.provider == "openai"
-    assert result.trace.prompt_version == "evaluation_v2"
+    assert result.trace.prompt_version == "evaluation_v4"
