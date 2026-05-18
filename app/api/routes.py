@@ -905,6 +905,35 @@ def submit_checkpoint_attempt(
         is_correct=is_correct,
     )
 
+    # When the learner gets it wrong, regenerate section content so the next
+    # view reflects the specific misconception and presents a fresh checkpoint
+    # angle. We do this after saving the learner so misconceptions are included.
+    if not is_correct:
+        selected_option_text = next(
+            (opt.text for opt in checkpoint.options if opt.id == payload.selected_option_id),
+            None,
+        )
+        try:
+            course_workspace.get_or_create_section_content(
+                course=course,
+                section=current_section,
+                learner=updated_learner,
+                concept=concept,
+                lesson_plan=lesson_plan,
+                active_step=active_step,
+                recent_messages=[turn.learner_message for turn in session.turns[-3:]],
+                force_regenerate=True,
+                prior_wrong_answer=selected_option_text,
+                prior_checkpoint_explanation=checkpoint.explanation,
+            )
+        except LlmError:
+            # Regeneration failing is non-fatal — the learner still gets feedback.
+            logger.warning(
+                "Failed to regenerate section content after wrong checkpoint learner_id=%s checkpoint_id=%s",
+                learner.id,
+                checkpoint.id,
+            )
+
     return CheckpointAttemptResponse(
         checkpoint_id=checkpoint.id,
         is_correct=is_correct,

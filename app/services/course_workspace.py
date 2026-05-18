@@ -113,9 +113,12 @@ class CourseWorkspaceService:
         lesson_plan: LessonPlan,
         active_step: LessonPlanStep | None,
         recent_messages: list[str],
+        force_regenerate: bool = False,
+        prior_wrong_answer: str | None = None,
+        prior_checkpoint_explanation: str | None = None,
     ) -> CourseSectionContent:
         existing = self.course_repository.get_section_content(course.id, section.id)
-        if existing is not None:
+        if existing is not None and not force_regenerate:
             return existing
 
         content = self.lesson_content_service.generate(
@@ -124,14 +127,23 @@ class CourseWorkspaceService:
             lesson_plan=lesson_plan,
             active_step=active_step,
             recent_messages=recent_messages,
+            prior_wrong_answer=prior_wrong_answer,
+            prior_checkpoint_explanation=prior_checkpoint_explanation,
         )
-        return self.course_repository.save_section_content(
-            CourseSectionContent(
+        record = CourseSectionContent(
+            course_id=course.id,
+            section_id=section.id,
+            content=content,
+        )
+        # Preserve the id if we're replacing existing content so foreign keys stay stable.
+        if existing is not None:
+            record = CourseSectionContent(
+                id=existing.id,
                 course_id=course.id,
                 section_id=section.id,
                 content=content,
             )
-        )
+        return self.course_repository.save_section_content(record)
 
     def record_checkpoint_attempt(
         self,
