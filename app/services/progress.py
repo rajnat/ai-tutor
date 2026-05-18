@@ -14,6 +14,8 @@ class ProgressService:
         concepts = self.curriculum_repository.list_concepts(subject=subject)
         progress: list[TopicProgress] = []
         for concept in concepts:
+            if not any(obj.id in learner.objective_states for obj in concept.objectives):
+                continue
             objective_progress = []
             for objective in concept.objectives:
                 state = learner.objective_states.get(objective.id)
